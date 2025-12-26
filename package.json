@@ -1,0 +1,35 @@
+{
+  "name": "cortex",
+  "version": "1.0.0",
+  "description": "Local-first, block-based Markdown editor with AI capabilities",
+  "main": "./out/main/index.js",
+  "author": "Woojing",
+  "license": "MIT",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --ext .ts,.tsx"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.21.0",
+    "gray-matter": "^4.0.3",
+    "lucide-react": "^0.562.0",
+    "nanoid": "^5.0.9",
+    "zustand": "^5.0.2"
+  },
+  "devDependencies": {
+    "@electron-toolkit/utils": "^3.0.0",
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.2.1",
+    "electron-vite": "^2.3.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.7.2",
+    "vite": "^5.4.0"
+  }
+}
