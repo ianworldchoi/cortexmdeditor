@@ -3,6 +3,7 @@ import { PanelRight } from 'lucide-react'
 import { useVaultStore } from './stores/vaultStore'
 import { useAIStore } from './stores/aiStore'
 import { useEditorStore } from './stores/editorStore'
+import { useThemeStore } from './stores/themeStore'
 import Sidebar from './components/Sidebar/Sidebar'
 // import TabBar from './components/TabBar/TabBar' // Removed global TabBar
 import EditorArea from './components/Editor/EditorArea'
@@ -13,6 +14,13 @@ import './styles/components.css'
 export default function App() {
     const { vaultPath, refreshTree } = useVaultStore()
     const { isPanelOpen, togglePanel } = useAIStore()
+    const { theme } = useThemeStore()
+
+    // Apply theme to document
+    useEffect(() => {
+        document.documentElement.setAttribute('data-theme', theme)
+    }, [theme])
+
     // const { activeTabId, closeTab } = useEditorStore() // Removed invalid destructuring
 
     // Keyboard shortcuts

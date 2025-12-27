@@ -574,20 +574,31 @@ function parseContentToBlocks(content: string): Block[] {
 
         // Toggle block (>> header)
         if (line.startsWith('>> ')) {
+            const header = line.slice(3)
+            const collapsedPrefix = '[collapsed] '
+            const isCollapsed = header.startsWith(collapsedPrefix)
+            const title = isCollapsed ? header.slice(collapsedPrefix.length) : header
+
             const toggleBlock: Block = {
                 block_id: crypto.randomUUID(),
                 type: 'toggle',
-                content: line.slice(3),
-                collapsed: false,
+                content: title,
+                collapsed: isCollapsed,
                 children: []
             }
-            // Collect children (tab-indented lines) - SIMPLE IMPLEMENTATION (Text only)
+            // Collect children (tab or space-indented lines)
             i++
-            while (i < lines.length && lines[i].startsWith('\t')) {
+            while (i < lines.length) {
+                const childLine = lines[i]
+                const isTabChild = childLine.startsWith('\t')
+                const isSpaceChild = childLine.startsWith('  ')
+                if (!isTabChild && !isSpaceChild) break
+
+                const content = isTabChild ? childLine.slice(1) : childLine.replace(/^ {2,}/, '')
                 toggleBlock.children!.push({
                     block_id: crypto.randomUUID(),
                     type: 'text',
-                    content: lines[i].slice(1) // Remove leading tab
+                    content
                 })
                 i++
             }
@@ -732,8 +743,10 @@ function serializeDocumentToMarkdown(doc: Document): string {
             case 'callout':
                 return `> [!NOTE]\n> ${block.content}`
             case 'toggle': {
-                // Toggle block: >> header, children indented with tab
-                const header = `>> ${block.content}`
+                // Toggle block: >> header, children indented (tab; reader also accepts spaces)
+                const header = block.collapsed
+                    ? `>> [collapsed] ${block.content}`
+                    : `>> ${block.content}`
                 if (block.children && block.children.length > 0) {
                     const childLines = block.children.map(child => `\t${child.content}`).join('\n')
                     return `${header}\n${childLines}`

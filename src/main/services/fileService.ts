@@ -70,7 +70,13 @@ export async function createFile(filePath: string, content: string): Promise<voi
  * Delete a file
  */
 export async function deleteFile(filePath: string): Promise<void> {
-    await fs.unlink(filePath)
+    const stats = await fs.lstat(filePath)
+    if (stats.isDirectory()) {
+        // Remove directory contents recursively (used for folder deletions in UI)
+        await fs.rm(filePath, { recursive: true, force: true })
+    } else {
+        await fs.unlink(filePath)
+    }
 }
 
 /**

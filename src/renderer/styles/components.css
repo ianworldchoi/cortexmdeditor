@@ -16,7 +16,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: var(--color-bg-glass);
+    background: var(--color-bg-sidebar);
     backdrop-filter: blur(var(--blur-lg));
     border-bottom: 0.5px solid var(--color-border);
     flex-shrink: 0;
@@ -82,7 +82,7 @@
     width: var(--sidebar-width);
     display: flex;
     flex-direction: column;
-    background: var(--color-bg-glass);
+    background: var(--color-bg-sidebar);
     backdrop-filter: blur(var(--blur-lg));
     border-right: 0.5px solid var(--color-border);
     flex-shrink: 0;
@@ -208,7 +208,7 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.9) 0%, rgba(255, 255, 255, 0.95) 100%);
+    background: var(--color-bg-editor);
 }
 
 /* Tab Bar */
@@ -743,7 +743,7 @@
     width: var(--ai-panel-width);
     display: flex;
     flex-direction: column;
-    background: var(--color-bg-glass);
+    background: var(--color-bg-sidebar);
     backdrop-filter: blur(var(--blur-xl));
     border-left: 0.5px solid var(--color-border);
     animation: slideInFromRight var(--duration-slow) var(--ease-in-out);
@@ -770,15 +770,17 @@
 }
 
 .ai-panel-header {
-    padding: var(--space-4);
+    height: 40px;
+    padding: 0 var(--space-3);
     display: flex;
     align-items: center;
     justify-content: space-between;
     border-bottom: 0.5px solid var(--color-divider);
+    flex-shrink: 0;
 }
 
 .ai-panel-title {
-    font-size: var(--text-base);
+    font-size: var(--text-sm);
     font-weight: 600;
     color: var(--color-text-primary);
 }
@@ -847,9 +849,7 @@
 }
 
 .ai-message-content {
-    max-width: 85%;
-    padding: var(--space-3) var(--space-4);
-    border-radius: var(--radius-lg);
+    max-width: 100%;
     font-size: var(--text-sm);
     line-height: var(--leading-relaxed);
 }
@@ -857,13 +857,16 @@
 .ai-message.user .ai-message-content {
     background: var(--color-accent);
     color: white;
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-lg);
     border-bottom-right-radius: var(--radius-xs);
+    max-width: 85%;
 }
 
 .ai-message.assistant .ai-message-content {
-    background: var(--color-bg-secondary);
+    background: transparent;
     color: var(--color-text-primary);
-    border-bottom-left-radius: var(--radius-xs);
+    padding: 0;
 }
 
 /* Input Area */

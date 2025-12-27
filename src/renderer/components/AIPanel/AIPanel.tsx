@@ -821,25 +821,25 @@ export default function AIPanel() {
                     </div>
                 </div>
 
-                {/* Context Display */}
-                <div className="ai-context">
-                    <div className="ai-context-title">Context</div>
-                    <div className="ai-context-item">
+                {/* Context Status Bar */}
+                <div className="ai-context-status" style={{
+                    padding: 'var(--space-2) var(--space-4)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    fontSize: 'var(--text-xs)',
+                    color: 'var(--color-text-tertiary)',
+                    borderBottom: '1px solid var(--color-divider)'
+                }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         <FileText size={12} />
-                        <span>
-                            {activeDocument
-                                ? `Active: ${activeDocument.meta.title}`
-                                : 'No document open'}
-                        </span>
+                        <span>{activeDocument ? '1 File Selected' : 'No Active File'}</span>
                     </div>
-                    <div className="ai-context-item">
-                        <Library size={12} />
-                        <span>{vaultDocCount} documents in session</span>
-                    </div>
+                    {/* Placeholder for future diff counting or validation status */}
                 </div>
 
                 {/* Messages */}
-                <div className="ai-messages">
+                <div className="ai-messages" style={{ flex: 1, overflowY: 'auto' }}>
                     {messages.length === 0 && (
                         <div
                             style={{
@@ -896,7 +896,7 @@ export default function AIPanel() {
                 </div>
 
                 {/* Input Area */}
-                <div className="ai-input-area">
+                <div className="ai-input-area" style={{ padding: 'var(--space-4)' }}>
                     {!apiKey && (
                         <div
                             style={{
@@ -914,24 +914,9 @@ export default function AIPanel() {
                         </div>
                     )}
 
-                    {/* Model Selector */}
-                    <div className="ai-model-selector">
-                        {MODEL_OPTIONS.map((option) => (
-                            <button
-                                key={option.value}
-                                className={`ai-model-btn ${selectedModel === option.value ? 'active' : ''}`}
-                                onClick={() => setSelectedModel(option.value)}
-                                title={option.value}
-                            >
-                                {option.icon}
-                                <span>{option.label}</span>
-                            </button>
-                        ))}
-                    </div>
-
                     {/* Pending Attachments Preview */}
                     {pendingAttachments.length > 0 && (
-                        <div className="pending-attachments">
+                        <div className="pending-attachments" style={{ marginBottom: 8 }}>
                             {pendingAttachments.map(att => (
                                 <div key={att.id} className="pending-attachment">
                                     <span className="attachment-name">{att.name}</span>
@@ -943,39 +928,125 @@ export default function AIPanel() {
                         </div>
                     )}
 
-                    <div className="ai-input-container">
-                        <input
-                            type="file"
-                            ref={fileInputRef}
-                            style={{ display: 'none' }}
-                            onChange={handleFileSelect}
-                            multiple
-                            accept="image/*,application/pdf"
-                        />
-                        <button
-                            className="ai-attach-btn"
-                            onClick={() => fileInputRef.current?.click()}
-                            title="Attach Image or PDF"
-                        >
-                            <Paperclip size={16} />
-                        </button>
+                    {/* Unified Input Container */}
+                    <div className="ai-input-container-unified" style={{
+                        border: '1px solid var(--color-border)',
+                        borderRadius: 'var(--radius-md)',
+                        background: 'var(--color-bg-primary)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                    }}>
+                        {/* 1. Text Input */}
                         <textarea
                             ref={inputRef}
-                            className="ai-input"
+                            className="ai-input-unified"
                             value={input}
-                            onChange={(e) => setInput(e.target.value)}
+                            onChange={(e) => {
+                                setInput(e.target.value)
+                                // Auto-resize
+                                e.target.style.height = 'auto'
+                                e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'
+                            }}
                             onKeyDown={handleKeyDown}
-                            placeholder="Ask me something..."
+                            placeholder="Ask anything (⌘L), @ to mention, / for workflows"
                             rows={1}
                             disabled={isLoading}
+                            style={{
+                                width: '100%',
+                                padding: '12px 14px',
+                                border: 'none',
+                                background: 'transparent',
+                                resize: 'none',
+                                outline: 'none',
+                                minHeight: '44px',
+                                maxHeight: '200px',
+                                lineHeight: '1.5',
+                                fontSize: 'var(--text-sm)'
+                            }}
                         />
-                        <button
-                            className="ai-send-btn"
-                            onClick={handleSubmit}
-                            disabled={(!input.trim() && pendingAttachments.length === 0) || isLoading}
-                        >
-                            <Send size={16} />
-                        </button>
+
+                        {/* 2. Toolbar */}
+                        <div className="ai-input-toolbar" style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            padding: '2px 10px 6px',
+                            minHeight: '24px'
+                        }}>
+                            <div className="ai-toolbar-left" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                <input
+                                    type="file"
+                                    ref={fileInputRef}
+                                    style={{ display: 'none' }}
+                                    onChange={handleFileSelect}
+                                    multiple
+                                    accept="image/*,application/pdf"
+                                />
+                                <button
+                                    className="ai-toolbar-btn"
+                                    onClick={() => fileInputRef.current?.click()}
+                                    title="Add Attachment"
+                                    style={{ padding: 4, color: 'var(--color-text-tertiary)', background: 'transparent', border: 'none', borderRadius: 4, cursor: 'pointer' }}
+                                >
+                                    <Plus size={16} />
+                                </button>
+                                <div style={{ width: 1, height: 16, background: 'var(--color-divider)', margin: '0 4px' }} />
+                                {/* Simple Model Selector Trigger (Dropdown logic can be added later or simple toggle) */}
+                                <div
+                                    className="ai-model-trigger"
+                                    style={{
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: 6,
+                                        fontSize: 'var(--text-xs)',
+                                        color: 'var(--color-text-secondary)',
+                                        cursor: 'pointer',
+                                        padding: '4px 8px',
+                                        borderRadius: 4,
+                                        // user might want a dropdown, for now specific selection logic is simplified or cycles
+                                    }}
+                                    onClick={() => {
+                                        // Cycle models for now or open a simple menu
+                                        const nextModel = selectedModel === 'gemini-3-flash-preview' ? 'gemini-3-pro-preview' : 'gemini-3-flash-preview'
+                                        setSelectedModel(nextModel)
+                                    }}
+                                >
+                                    {selectedModel === 'gemini-3-flash-preview' ? <Zap size={14} /> : <Sparkles size={14} />}
+                                    <span>{selectedModel === 'gemini-3-flash-preview' ? 'Gemini 3 Flash' : 'Gemini 3 Pro'}</span>
+                                </div>
+                            </div>
+
+                            <div className="ai-toolbar-right">
+                                <button
+                                    className="ai-send-btn-unified"
+                                    onClick={handleSubmit}
+                                    disabled={(!input.trim() && pendingAttachments.length === 0) || isLoading}
+                                    style={{
+                                        width: 28,
+                                        height: 28,
+                                        borderRadius: '50%',
+                                        background: (!input.trim() && pendingAttachments.length === 0) ? 'var(--color-bg-tertiary)' : 'var(--color-accent)',
+                                        color: (!input.trim() && pendingAttachments.length === 0) ? 'var(--color-text-tertiary)' : 'white',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        border: 'none',
+                                        cursor: (!input.trim() && pendingAttachments.length === 0) ? 'default' : 'pointer',
+                                        transition: 'all 0.2s'
+                                    }}
+                                >
+                                    {isLoading ? (
+                                        <div style={{ width: 12, height: 12, border: '2px solid white', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+                                    ) : (
+                                        <Send size={14} /> // User mockup had ArrowRight, but Send is semantic. Let's stick with arrow if they want 1:1, but Send is standard. ArrowRight was in image.
+                                    )}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style={{ textAlign: 'center', fontSize: '10px', color: 'var(--color-text-tertiary)', marginTop: 8 }}>
+                        LLMs can make mistakes. Verify important info.
                     </div>
                 </div>
             </div>

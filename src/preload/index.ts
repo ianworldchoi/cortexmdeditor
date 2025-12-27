@@ -41,7 +41,12 @@ const api = {
 
     // Path utilities
     pathExists: (filePath: string): Promise<boolean> =>
-        ipcRenderer.invoke('path:exists', filePath)
+        ipcRenderer.invoke('path:exists', filePath),
+
+    // AI Operations
+    processYouTubeUrl: (apiKey: string, url: string): Promise<{ strategy: string, url: string, fileUri?: string, mimeType?: string }> =>
+        ipcRenderer.invoke('ai:process-youtube-url', apiKey, url)
+
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

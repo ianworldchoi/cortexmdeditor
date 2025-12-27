@@ -14,6 +14,9 @@ import {
 } from './services/fileService'
 import { pathToFileURL } from 'url'
 
+
+
+
 // Register privileged schemes
 protocol.registerSchemesAsPrivileged([
     {
@@ -135,7 +138,19 @@ function setupIpcHandlers(): void {
     ipcMain.handle('path:exists', async (_, filePath: string) => {
         return pathExists(filePath)
     })
+
+    // Process YouTube URL
+    ipcMain.handle('ai:process-youtube-url', async (_, apiKey: string, url: string) => {
+        try {
+            // For migration parity, we just return the strategy.
+            return { strategy: 'direct_url', url: url }
+        } catch (e) {
+            console.error('Error in ai:process-youtube-url:', e)
+            throw e
+        }
+    })
 }
+
 
 function setupProtocolHandlers(): void {
     protocol.handle('media', (request) => {

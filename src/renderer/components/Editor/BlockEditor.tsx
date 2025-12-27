@@ -836,26 +836,54 @@ export default function BlockEditor({ document, tabId }: BlockEditorProps) {
             setSlashMenuBlockId(null)
         }
 
-        const trimmed = value.trimEnd()
-        if (value.endsWith(' ') && block.type === 'text') {
-            // ... existing markdown shortcut logic ...
-            let newType: BlockType | null = null
-            let newContent = ''
+        const detectShortcut = (input: string) => {
+            const trimmed = input.trimEnd()
 
-            if (trimmed === '#') newType = 'heading1'
-            else if (trimmed === '##') newType = 'heading2'
-            else if (trimmed === '###') newType = 'heading3'
-            else if (trimmed === '-' || trimmed === '*') newType = 'bullet'
-            else if (/^\d+\.$/.test(trimmed)) newType = 'numbered'
-            else if (trimmed === '[]' || trimmed === '[ ]') newType = 'todo'
-            else if (trimmed === '>>') newType = 'toggle'
-            else if (trimmed === '>') newType = 'quote'
-            else if (trimmed === '```') newType = 'code'
-            else if (trimmed === '---' || trimmed === '***') newType = 'divider'
-            else if (trimmed === '!!' || trimmed === ':::') newType = 'callout'
+            const heading1 = trimmed.match(/^#\s+(.*)$/)
+            if (heading1) return { type: 'heading1' as BlockType, content: heading1[1] }
 
-            if (newType) {
-                updateBlock(block.block_id, { type: newType, content: newContent })
+            const heading2 = trimmed.match(/^##\s+(.*)$/)
+            if (heading2) return { type: 'heading2' as BlockType, content: heading2[1] }
+
+            const heading3 = trimmed.match(/^###\s+(.*)$/)
+            if (heading3) return { type: 'heading3' as BlockType, content: heading3[1] }
+
+            const todo = trimmed.match(/^- \[([ x])\]\s+(.*)$/)
+            if (todo) {
+                return {
+                    type: 'todo' as BlockType,
+                    content: todo[2],
+                    checked: todo[1] === 'x'
+                }
+            }
+            if (trimmed === '[]' || trimmed === '[ ]') {
+                return { type: 'todo' as BlockType, content: '', checked: false }
+            }
+
+            const bullet = trimmed.match(/^- (.*)$/)
+            if (bullet) return { type: 'bullet' as BlockType, content: bullet[1] }
+
+            const numbered = trimmed.match(/^\d+\.\s+(.*)$/)
+            if (numbered) return { type: 'numbered' as BlockType, content: numbered[1] }
+
+            const toggle = trimmed.match(/^>>\s+(.*)$/)
+            if (toggle) {
+                return { type: 'toggle' as BlockType, content: toggle[1], collapsed: false }
+            }
+
+            const quote = trimmed.match(/^>\s+(.*)$/)
+            if (quote) return { type: 'quote' as BlockType, content: quote[1] }
+
+            if (trimmed === '```') return { type: 'code' as BlockType, content: '' }
+            if (trimmed === '---' || trimmed === '***') return { type: 'divider' as BlockType, content: '' }
+            if (trimmed === '!!' || trimmed === ':::') return { type: 'callout' as BlockType, content: '' }
+            return null
+        }
+
+        if (block.type === 'text') {
+            const shortcut = detectShortcut(value)
+            if (shortcut) {
+                updateBlock(block.block_id, shortcut)
                 return
             }
         }
@@ -1006,7 +1034,7 @@ export default function BlockEditor({ document, tabId }: BlockEditorProps) {
                         }
                     }}
                     onChildDelete={(childIndex) => {
-                        if (block.children && block.children.length > 1) {
+                        if (block.children) {
                             const newChildren = block.children.filter((_, i) => i !== childIndex)
                             updateBlock(block.block_id, { children: newChildren })
                         }
