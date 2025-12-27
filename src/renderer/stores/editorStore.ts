@@ -4,48 +4,79 @@ import type { Document, Block } from '@shared/types'
 
 export interface Tab {
     id: string
+    type: 'document' | 'browser'
     filePath: string
     title: string
     document: Document | null
     isDirty: boolean
     isLoading: boolean
+    url?: string  // For browser tabs
+}
+
+export interface EditorGroup {
+    id: string
+    tabs: Tab[]
+    activeTabId: string | null
+    widthRatio?: number // Width ratio for split view (0-100)
 }
 
 interface SavedTab {
     filePath: string
     title: string
+    groupId?: string
 }
 
 interface EditorState {
-    tabs: Tab[]
-    activeTabId: string | null
+    editorGroups: EditorGroup[]
+    activeGroupId: string | null
     savedTabs: SavedTab[] // For persistence
 
     // Actions
-    openTab: (filePath: string, title: string) => Promise<void>
-    closeTab: (tabId: string) => void
-    setActiveTab: (tabId: string) => void
+    openTab: (filePath: string, title: string, groupId?: string) => Promise<void>
+    openBrowserTab: (url?: string, groupId?: string) => void
+    updateBrowserUrl: (tabId: string, url: string, title?: string) => void
+    closeTab: (tabId: string, groupId?: string) => void
+    setActiveTab: (tabId: string, groupId?: string) => void
+    setActiveGroup: (groupId: string) => void
     updateDocument: (tabId: string, blocks: Block[]) => void
+    updateDocumentMeta: (tabId: string, meta: Partial<import('@shared/types').DocumentMeta>) => void
     markDirty: (tabId: string, isDirty: boolean) => void
     saveTab: (tabId: string) => Promise<void>
     getActiveDocument: () => Document | null
     restoreOpenTabs: () => Promise<void>
+
+    // Split View Actions
+    splitEditorRight: () => void
+    closeGroup: (groupId: string) => void
+    setGroupWidth: (groupId: string, ratio: number) => void
+
+    // Navigation
+    selectNextTab: () => void
+    selectPrevTab: () => void
 }
 
 export const useEditorStore = create<EditorState>()(
     persist(
         (set, get) => ({
-            tabs: [],
-            activeTabId: null,
+            editorGroups: [{ id: 'default', tabs: [], activeTabId: null }],
+            activeGroupId: 'default',
             savedTabs: [],
 
-            openTab: async (filePath: string, title: string) => {
-                const { tabs } = get()
+            openTab: async (filePath: string, title: string, targetGroupId?: string) => {
+                const { editorGroups, activeGroupId } = get()
+                const groupId = targetGroupId || activeGroupId || editorGroups[0].id
 
-                // Check if already open
-                const existingTab = tabs.find(t => t.filePath === filePath)
+                const groupIndex = editorGroups.findIndex(g => g.id === groupId)
+                if (groupIndex === -1) return
+
+                const group = editorGroups[groupIndex]
+
+                // Check if already open in this group
+                const existingTab = group.tabs.find(t => t.filePath === filePath)
                 if (existingTab) {
-                    set({ activeTabId: existingTab.id })
+                    const newGroups = [...editorGroups]
+                    newGroups[groupIndex] = { ...group, activeTabId: existingTab.id }
+                    set({ editorGroups: newGroups, activeGroupId: groupId })
                     return
                 }
 
@@ -53,6 +84,7 @@ export const useEditorStore = create<EditorState>()(
                 const tabId = crypto.randomUUID()
                 const newTab: Tab = {
                     id: tabId,
+                    type: 'document',
                     filePath,
                     title: title.replace('.md', ''),
                     document: null,
@@ -60,89 +92,225 @@ export const useEditorStore = create<EditorState>()(
                     isLoading: true
                 }
 
-                set(state => ({
-                    tabs: [...state.tabs, newTab],
+                const newGroups = [...editorGroups]
+                newGroups[groupIndex] = {
+                    ...group,
+                    tabs: [...group.tabs, newTab],
                     activeTabId: tabId
-                }))
+                }
+
+                set({ editorGroups: newGroups, activeGroupId: groupId })
 
                 // Load document content
                 try {
                     const content = await window.api.readFile(filePath)
                     const document = parseMarkdownToDocument(content, filePath)
 
-                    set(state => ({
-                        tabs: state.tabs.map(t =>
-                            t.id === tabId
-                                ? { ...t, document, isLoading: false }
-                                : t
-                        )
-                    }))
+                    set(state => {
+                        const currentGroups = [...state.editorGroups]
+                        const gIdx = currentGroups.findIndex(g => g.id === groupId)
+                        if (gIdx !== -1) {
+                            currentGroups[gIdx] = {
+                                ...currentGroups[gIdx],
+                                tabs: currentGroups[gIdx].tabs.map(t =>
+                                    t.id === tabId ? { ...t, document, isLoading: false } : t
+                                )
+                            }
+                        }
+                        return { editorGroups: currentGroups }
+                    })
                 } catch (error) {
                     console.error('Failed to load document:', error)
-                    set(state => ({
-                        tabs: state.tabs.map(t =>
-                            t.id === tabId
-                                ? { ...t, isLoading: false }
-                                : t
-                        )
-                    }))
+                    set(state => {
+                        const currentGroups = [...state.editorGroups]
+                        const gIdx = currentGroups.findIndex(g => g.id === groupId)
+                        if (gIdx !== -1) {
+                            currentGroups[gIdx] = {
+                                ...currentGroups[gIdx],
+                                tabs: currentGroups[gIdx].tabs.map(t =>
+                                    t.id === tabId ? { ...t, isLoading: false } : t
+                                )
+                            }
+                        }
+                        return { editorGroups: currentGroups }
+                    })
                 }
             },
 
-            closeTab: (tabId: string) => {
+            openBrowserTab: (url?: string, targetGroupId?: string) => {
+                const { editorGroups, activeGroupId } = get()
+                const groupId = targetGroupId || activeGroupId || editorGroups[0].id
+
+                const groupIndex = editorGroups.findIndex(g => g.id === groupId)
+                if (groupIndex === -1) return
+
+                const group = editorGroups[groupIndex]
+                const tabId = crypto.randomUUID()
+                const initialUrl = url || 'https://www.google.com'
+
+                const newTab: Tab = {
+                    id: tabId,
+                    type: 'browser',
+                    filePath: '',
+                    title: 'New Tab',
+                    document: null,
+                    isDirty: false,
+                    isLoading: false,
+                    url: initialUrl
+                }
+
+                const newGroups = [...editorGroups]
+                newGroups[groupIndex] = {
+                    ...group,
+                    tabs: [...group.tabs, newTab],
+                    activeTabId: tabId
+                }
+
+                set({ editorGroups: newGroups, activeGroupId: groupId })
+            },
+
+            updateBrowserUrl: (tabId: string, url: string, title?: string) => {
                 set(state => {
-                    const newTabs = state.tabs.filter(t => t.id !== tabId)
-                    let newActiveId = state.activeTabId
-
-                    if (state.activeTabId === tabId) {
-                        const index = state.tabs.findIndex(t => t.id === tabId)
-                        newActiveId = newTabs[Math.min(index, newTabs.length - 1)]?.id ?? null
-                    }
-
-                    return { tabs: newTabs, activeTabId: newActiveId }
+                    const newGroups = state.editorGroups.map(group => ({
+                        ...group,
+                        tabs: group.tabs.map(tab =>
+                            tab.id === tabId
+                                ? { ...tab, url, title: title || tab.title }
+                                : tab
+                        )
+                    }))
+                    return { editorGroups: newGroups }
                 })
             },
 
-            setActiveTab: (tabId: string) => {
-                set({ activeTabId: tabId })
+            closeTab: (tabId: string, groupId?: string) => {
+                set(state => {
+                    let targetGroupId = groupId
+                    if (!targetGroupId) {
+                        for (const g of state.editorGroups) {
+                            if (g.tabs.some(t => t.id === tabId)) {
+                                targetGroupId = g.id
+                                break
+                            }
+                        }
+                    }
+
+                    if (!targetGroupId) return state
+
+                    const groupIndex = state.editorGroups.findIndex(g => g.id === targetGroupId)
+                    if (groupIndex === -1) return state
+
+                    const group = state.editorGroups[groupIndex]
+                    const newTabs = group.tabs.filter(t => t.id !== tabId)
+                    let newActiveId = group.activeTabId
+
+                    if (group.activeTabId === tabId) {
+                        const index = group.tabs.findIndex(t => t.id === tabId)
+                        newActiveId = newTabs[Math.min(index, newTabs.length - 1)]?.id ?? null
+                    }
+
+                    const newGroups = [...state.editorGroups]
+                    newGroups[groupIndex] = { ...group, tabs: newTabs, activeTabId: newActiveId }
+
+                    return { editorGroups: newGroups }
+                })
+            },
+
+            setActiveTab: (tabId: string, groupId?: string) => {
+                set(state => {
+                    let targetGroupId = groupId
+                    if (!targetGroupId) {
+                        for (const g of state.editorGroups) {
+                            if (g.tabs.some(t => t.id === tabId)) {
+                                targetGroupId = g.id
+                                break
+                            }
+                        }
+                    }
+
+                    if (!targetGroupId) return state
+
+                    const groupIndex = state.editorGroups.findIndex(g => g.id === targetGroupId)
+                    const newGroups = [...state.editorGroups]
+                    newGroups[groupIndex] = { ...newGroups[groupIndex], activeTabId: tabId }
+                    return { editorGroups: newGroups, activeGroupId: targetGroupId }
+                })
+            },
+
+            setActiveGroup: (groupId: string) => {
+                set({ activeGroupId: groupId })
             },
 
             updateDocument: (tabId: string, blocks: Block[]) => {
-                set(state => ({
-                    tabs: state.tabs.map(t =>
-                        t.id === tabId && t.document
-                            ? {
-                                ...t,
-                                document: { ...t.document, blocks },
-                                isDirty: true
-                            }
-                            : t
-                    )
-                }))
+                set(state => {
+                    const newGroups = state.editorGroups.map(group => ({
+                        ...group,
+                        tabs: group.tabs.map(tab =>
+                            tab.id === tabId && tab.document
+                                ? { ...tab, document: { ...tab.document, blocks }, isDirty: true }
+                                : tab
+                        )
+                    }))
+                    return { editorGroups: newGroups }
+                })
+            },
+
+            updateDocumentMeta: (tabId: string, metaUpdates: Partial<import('@shared/types').DocumentMeta>) => {
+                set(state => {
+                    const newGroups = state.editorGroups.map(group => ({
+                        ...group,
+                        tabs: group.tabs.map(tab =>
+                            tab.id === tabId && tab.document
+                                ? {
+                                    ...tab,
+                                    document: {
+                                        ...tab.document,
+                                        meta: { ...tab.document.meta, ...metaUpdates }
+                                    },
+                                    isDirty: true
+                                }
+                                : tab
+                        )
+                    }))
+                    return { editorGroups: newGroups }
+                })
             },
 
             markDirty: (tabId: string, isDirty: boolean) => {
-                set(state => ({
-                    tabs: state.tabs.map(t =>
-                        t.id === tabId ? { ...t, isDirty } : t
-                    )
-                }))
+                set(state => {
+                    const newGroups = state.editorGroups.map(group => ({
+                        ...group,
+                        tabs: group.tabs.map(tab =>
+                            tab.id === tabId ? { ...tab, isDirty } : tab
+                        )
+                    }))
+                    return { editorGroups: newGroups }
+                })
             },
 
             saveTab: async (tabId: string) => {
-                const { tabs } = get()
-                const tab = tabs.find(t => t.id === tabId)
+                const { editorGroups } = get()
+                let tab: Tab | undefined
+
+                for (const group of editorGroups) {
+                    tab = group.tabs.find(t => t.id === tabId)
+                    if (tab) break
+                }
+
                 if (!tab?.document) return
 
                 try {
                     const content = serializeDocumentToMarkdown(tab.document)
                     await window.api.writeFile(tab.filePath, content)
+                    get().markDirty(tabId, false)
+
+                    // Update persistence
                     set(state => ({
-                        tabs: state.tabs.map(t =>
-                            t.id === tabId ? { ...t, isDirty: false } : t
-                        ),
-                        // Update savedTabs when saving
-                        savedTabs: state.tabs.map(t => ({ filePath: t.filePath, title: t.title }))
+                        savedTabs: state.editorGroups.flatMap(g => g.tabs.map(t => ({
+                            filePath: t.filePath,
+                            title: t.title,
+                            groupId: g.id
+                        })))
                     }))
                 } catch (error) {
                     console.error('Failed to save:', error)
@@ -150,25 +318,131 @@ export const useEditorStore = create<EditorState>()(
             },
 
             getActiveDocument: () => {
-                const { tabs, activeTabId } = get()
-                return tabs.find(t => t.id === activeTabId)?.document ?? null
+                const { editorGroups, activeGroupId } = get()
+                const group = editorGroups.find(g => g.id === activeGroupId)
+                if (!group || !group.activeTabId) return null
+
+                const tab = group.tabs.find(t => t.id === group.activeTabId)
+                return tab?.document ?? null
             },
 
             restoreOpenTabs: async () => {
                 const { savedTabs, openTab } = get()
-                for (const savedTab of savedTabs) {
+                // If savedTabs has groupId, we could use it, but for now openTab logic handles assignment.
+                // To restore properly into groups, we check if generic openTab can handle it or if we need to pre-create groups.
+                // For simplicity, we restore iteratively. 
+                // Enhanced Migration: If we want to restore to specific groups, we should create those groups first.
+                // But for now, let's just restore linear.
+                for (const saved of savedTabs) {
                     try {
-                        await openTab(savedTab.filePath, savedTab.title)
+                        await openTab(saved.filePath, saved.title, saved.groupId)
                     } catch (error) {
-                        console.error('Failed to restore tab:', savedTab.filePath, error)
+                        console.error('Failed to restore tab:', saved.filePath, error)
                     }
                 }
+            },
+
+            splitEditorRight: () => {
+                set(state => {
+                    const newGroupId = crypto.randomUUID()
+                    const newGroup: EditorGroup = { id: newGroupId, tabs: [], activeTabId: null, widthRatio: 50 }
+
+                    // Set existing groups to equal width ratios
+                    const totalGroups = state.editorGroups.length + 1
+                    const equalRatio = 100 / totalGroups
+                    const updatedGroups = state.editorGroups.map(g => ({ ...g, widthRatio: equalRatio }))
+
+                    return {
+                        editorGroups: [...updatedGroups, { ...newGroup, widthRatio: equalRatio }],
+                        activeGroupId: newGroupId
+                    }
+                })
+            },
+
+            closeGroup: (groupId: string) => {
+                set(state => {
+                    if (state.editorGroups.length <= 1) return state
+                    const newGroups = state.editorGroups.filter(g => g.id !== groupId)
+                    // Redistribute width ratios equally
+                    const equalRatio = 100 / newGroups.length
+                    const redistributedGroups = newGroups.map(g => ({ ...g, widthRatio: equalRatio }))
+                    const newActiveId = state.activeGroupId === groupId ? redistributedGroups[0].id : state.activeGroupId
+                    return { editorGroups: redistributedGroups, activeGroupId: newActiveId }
+                })
+            },
+
+            setGroupWidth: (groupId: string, ratio: number) => {
+                set(state => {
+                    const groupIndex = state.editorGroups.findIndex(g => g.id === groupId)
+                    if (groupIndex === -1) return state
+
+                    const newGroups = [...state.editorGroups]
+                    newGroups[groupIndex] = { ...newGroups[groupIndex], widthRatio: ratio }
+
+                    // Adjust adjacent group to maintain 100% total
+                    if (groupIndex < newGroups.length - 1) {
+                        const remaining = 100 - ratio
+                        // Distribute remaining to other groups proportionally
+                        const othersTotal = newGroups.reduce((sum, g, i) => i !== groupIndex ? sum + (g.widthRatio || 50) : sum, 0)
+                        newGroups.forEach((g, i) => {
+                            if (i !== groupIndex) {
+                                const currentRatio = g.widthRatio || 50
+                                newGroups[i] = { ...g, widthRatio: (currentRatio / othersTotal) * remaining }
+                            }
+                        })
+                    }
+
+                    return { editorGroups: newGroups }
+                })
+            },
+
+            selectNextTab: () => {
+                set(state => {
+                    const { activeGroupId, editorGroups } = state
+                    const groupIndex = editorGroups.findIndex(g => g.id === activeGroupId)
+                    if (groupIndex === -1) return state
+
+                    const group = editorGroups[groupIndex]
+                    if (group.tabs.length <= 1) return state
+
+                    const currentTabIndex = group.tabs.findIndex(t => t.id === group.activeTabId)
+                    const nextIndex = (currentTabIndex + 1) % group.tabs.length
+                    const nextTabId = group.tabs[nextIndex].id
+
+                    const newGroups = [...editorGroups]
+                    newGroups[groupIndex] = { ...group, activeTabId: nextTabId }
+                    return { editorGroups: newGroups }
+                })
+            },
+
+            selectPrevTab: () => {
+                set(state => {
+                    const { activeGroupId, editorGroups } = state
+                    const groupIndex = editorGroups.findIndex(g => g.id === activeGroupId)
+                    if (groupIndex === -1) return state
+
+                    const group = editorGroups[groupIndex]
+                    if (group.tabs.length <= 1) return state
+
+                    const currentTabIndex = group.tabs.findIndex(t => t.id === group.activeTabId)
+                    const prevIndex = (currentTabIndex - 1 + group.tabs.length) % group.tabs.length
+                    const prevTabId = group.tabs[prevIndex].id
+
+                    const newGroups = [...editorGroups]
+                    newGroups[groupIndex] = { ...group, activeTabId: prevTabId }
+                    return { editorGroups: newGroups }
+                })
             }
+
         }),
         {
             name: 'cortex-editor',
             partialize: (state) => ({
-                savedTabs: state.tabs.map(t => ({ filePath: t.filePath, title: t.title }))
+                savedTabs: state.editorGroups.flatMap(g => g.tabs.map(t => ({
+                    filePath: t.filePath,
+                    title: t.title,
+                    groupId: g.id
+                })))
             })
         }
     )
@@ -183,7 +457,8 @@ function parseMarkdownToDocument(content: string, filePath: string): Document {
         title: 'Untitled',
         tags: [] as string[],
         created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
+        updated_at: new Date().toISOString(),
+        alwaysOn: false
     }
 
     let bodyContent = content
@@ -202,6 +477,7 @@ function parseMarkdownToDocument(content: string, filePath: string): Document {
             if (key === 'title') meta.title = value
             if (key === 'created_at') meta.created_at = value
             if (key === 'updated_at') meta.updated_at = value
+            if (key === 'alwaysOn') meta.alwaysOn = value === 'true'
             if (key === 'tags') {
                 const tagMatch = value.match(/\[(.*)\]/)
                 if (tagMatch) {
@@ -296,6 +572,29 @@ function parseContentToBlocks(content: string): Block[] {
             continue
         }
 
+        // Toggle block (>> header)
+        if (line.startsWith('>> ')) {
+            const toggleBlock: Block = {
+                block_id: crypto.randomUUID(),
+                type: 'toggle',
+                content: line.slice(3),
+                collapsed: false,
+                children: []
+            }
+            // Collect children (tab-indented lines) - SIMPLE IMPLEMENTATION (Text only)
+            i++
+            while (i < lines.length && lines[i].startsWith('\t')) {
+                toggleBlock.children!.push({
+                    block_id: crypto.randomUUID(),
+                    type: 'text',
+                    content: lines[i].slice(1) // Remove leading tab
+                })
+                i++
+            }
+            blocks.push(toggleBlock)
+            continue
+        }
+
         // Quote
         if (line.startsWith('> ')) {
             blocks.push({
@@ -337,15 +636,33 @@ function parseContentToBlocks(content: string): Block[] {
             continue
         }
 
-        // Image
-        const imageMatch = line.match(/^!\[(.*?)\]\((.*?)\)$/)
+        // Image - Obsidian style ![[filename]] or ![[filename|alt]]
+        const imageMatch = line.match(/^!\[\[(.+?)(?:\|(.+?))?\]\]$/)
         if (imageMatch) {
             blocks.push({
                 block_id: crypto.randomUUID(),
                 type: 'image',
-                content: imageMatch[2] // URL
+                content: imageMatch[1], // filename/path
+                alt: imageMatch[2] || '' // Alt text (after |)
             })
             i++
+            continue
+        }
+
+        // Callout
+        if (line.startsWith('> [!NOTE]')) {
+            let content = ''
+            if (i + 1 < lines.length && lines[i + 1].startsWith('> ')) {
+                content = lines[i + 1].slice(2)
+                i += 2
+            } else {
+                i++
+            }
+            blocks.push({
+                block_id: crypto.randomUUID(),
+                type: 'callout',
+                content: content
+            })
             continue
         }
 
@@ -372,16 +689,22 @@ function parseContentToBlocks(content: string): Block[] {
 
 function serializeDocumentToMarkdown(doc: Document): string {
     // Serialize frontmatter
-    const frontmatter = [
+    const frontmatterLines = [
         '---',
         `id: ${doc.meta.id}`,
         `title: ${doc.meta.title}`,
         `tags: [${doc.meta.tags.join(', ')}]`,
         `created_at: ${doc.meta.created_at}`,
-        `updated_at: ${new Date().toISOString()}`,
-        '---',
-        ''
-    ].join('\n')
+        `updated_at: ${new Date().toISOString()}`
+    ]
+
+    // Only include alwaysOn if true (to keep frontmatter clean)
+    if (doc.meta.alwaysOn) {
+        frontmatterLines.push('alwaysOn: true')
+    }
+
+    frontmatterLines.push('---', '')
+    const frontmatter = frontmatterLines.join('\n')
 
     // Serialize blocks
     const content = doc.blocks.map(block => {
@@ -405,9 +728,18 @@ function serializeDocumentToMarkdown(doc: Document): string {
             case 'code':
                 return `\`\`\`${block.language || ''}\n${block.content}\n\`\`\``
             case 'image':
-                return `![](${block.content})`
+                return block.alt ? `![[${block.content}|${block.alt}]]` : `![[${block.content}]]`
             case 'callout':
                 return `> [!NOTE]\n> ${block.content}`
+            case 'toggle': {
+                // Toggle block: >> header, children indented with tab
+                const header = `>> ${block.content}`
+                if (block.children && block.children.length > 0) {
+                    const childLines = block.children.map(child => `\t${child.content}`).join('\n')
+                    return `${header}\n${childLines}`
+                }
+                return header
+            }
             default:
                 return block.content
         }

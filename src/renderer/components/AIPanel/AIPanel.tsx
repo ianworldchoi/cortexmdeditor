@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect } from 'react'
-import { Settings, X, FileText, Library, Send, Zap, Sparkles, Plus, Check, Edit3, Trash2 } from 'lucide-react'
-import { useAIStore, type AIModel } from '../../stores/aiStore'
+import { Settings, X, FileText, Library, Send, Zap, Sparkles, Plus, Check, Edit3, Trash2, File, Folder, History, MoreHorizontal, Paperclip } from 'lucide-react'
+import { useVaultStore } from '../../stores/vaultStore'
+import { useAIStore, type AIModel, type AIAttachment } from '../../stores/aiStore'
+import SessionHistoryModal from './SessionHistoryModal'
 import { useEditorStore } from '../../stores/editorStore'
 import { sendMessage } from '../../services/geminiService'
 import SettingsModal from '../Settings/SettingsModal'
@@ -12,30 +14,106 @@ const MODEL_OPTIONS: { value: AIModel; label: string; icon: React.ReactNode }[] 
 ]
 
 interface AIAction {
-    type: 'update' | 'insert' | 'delete'
+    type: 'update' | 'insert' | 'delete' | 'create_file' | 'create_folder' | 'update_meta'
     id?: string
     afterId?: string
     content?: string
     blockType?: BlockType
+    path?: string // For file/folder creation
+    metaField?: 'title' | 'tags' | 'alwaysOn' // For metadata update
+    metaValue?: string | string[] | boolean // For metadata update
 }
 
 export default function AIPanel() {
     const {
         closePanel,
-        messages,
+        sessions,
+        activeSessionId,
+        createSession,
         addMessage,
         isLoading,
         setLoading,
         apiKey,
         selectedModel,
-        setSelectedModel
+        setSelectedModel,
+        panelWidth,
+        setPanelWidth,
+        truncateMessagesAfter
     } = useAIStore()
-    const { getActiveDocument, tabs, activeTabId, updateDocument } = useEditorStore()
+    const { getActiveDocument, editorGroups, activeGroupId, updateDocument, updateDocumentMeta } = useEditorStore()
+    const { refreshTree, vaultPath } = useVaultStore()
+
+    // Get active document for use throughout the component
+    const activeDocument = getActiveDocument()
+
+    const [isResizing, setIsResizing] = useState(false)
+    const resizeStartXRef = useRef<number | null>(null)
+    const resizeStartWidthRef = useRef<number | null>(null)
+
+    useEffect(() => {
+        const handleMouseMove = (e: MouseEvent) => {
+            if (!isResizing || resizeStartXRef.current === null || resizeStartWidthRef.current === null) return
+
+            const deltaX = resizeStartXRef.current - e.clientX
+            // Limit min width to 300px and max to 800px (or window width - sidebar)
+            const newWidth = Math.min(Math.max(resizeStartWidthRef.current + deltaX, 300), 800)
+            setPanelWidth(newWidth)
+        }
+
+        const handleMouseUp = () => {
+            setIsResizing(false)
+            resizeStartXRef.current = null
+            resizeStartWidthRef.current = null
+            document.body.style.cursor = 'default'
+            document.body.style.userSelect = 'auto'
+        }
+
+        if (isResizing) {
+            window.addEventListener('mousemove', handleMouseMove)
+            window.addEventListener('mouseup', handleMouseUp)
+            document.body.style.cursor = 'col-resize'
+            document.body.style.userSelect = 'none'
+        }
+
+        return () => {
+            window.removeEventListener('mousemove', handleMouseMove)
+            window.removeEventListener('mouseup', handleMouseUp)
+            document.body.style.cursor = 'default'
+            document.body.style.userSelect = 'auto'
+        }
+    }, [isResizing, setPanelWidth])
+
+    const handleResizeStart = (e: React.MouseEvent) => {
+        e.preventDefault()
+        setIsResizing(true)
+        resizeStartXRef.current = e.clientX
+        resizeStartWidthRef.current = panelWidth
+    }
 
     const [input, setInput] = useState('')
     const [showSettings, setShowSettings] = useState(false)
+    const [showHistory, setShowHistory] = useState(false)
+    const [pendingAttachments, setPendingAttachments] = useState<AIAttachment[]>([])
     const messagesEndRef = useRef<HTMLDivElement>(null)
     const inputRef = useRef<HTMLTextAreaElement>(null)
+    const fileInputRef = useRef<HTMLInputElement>(null)
+
+    // Snapshot for undo functionality
+    interface UndoSnapshot {
+        blocks: Block[]
+        tabId: string
+        messageId: string // The assistant message ID that contains the batch-action
+    }
+    const [undoSnapshots, setUndoSnapshots] = useState<Map<string, UndoSnapshot>>(new Map())
+
+    const activeSession = sessions.find(s => s.id === activeSessionId)
+
+    // Check if active session belongs to current vault
+    // If not, treat as no active session (will create new one on message) or show 'New Chat'
+    const isSessionInVault = activeSession?.vaultPath === vaultPath || (!activeSession?.vaultPath && !vaultPath) || activeSession?.vaultPath === undefined
+
+    const messages = (activeSession && isSessionInVault) ? activeSession.messages : []
+    const sessionTitle = (activeSession && isSessionInVault) ? activeSession.title : 'New Chat'
 
     // Auto-scroll to bottom
     useEffect(() => {
@@ -47,11 +125,11 @@ export default function AIPanel() {
         inputRef.current?.focus()
     }, [])
 
-    const activeDocument = getActiveDocument()
-    const vaultDocCount = tabs.length
+    // Calculate total vault document count across all groups
+    const vaultDocCount = editorGroups.reduce((acc, group) => acc + group.tabs.length, 0)
 
     const handleSubmit = async () => {
-        if (!input.trim() || isLoading) return
+        if ((!input.trim() && pendingAttachments.length === 0) || isLoading) return
 
         if (!apiKey) {
             setShowSettings(true)
@@ -59,12 +137,17 @@ export default function AIPanel() {
         }
 
         const userMessage = input.trim()
+        const attachmentsToSend = [...pendingAttachments]
+
         setInput('')
-        addMessage('user', userMessage)
+        setPendingAttachments([])
+
+        addMessage('user', userMessage, attachmentsToSend)
         setLoading(true)
 
         try {
-            const response = await sendMessage(userMessage, activeDocument)
+            const activeDocument = getActiveDocument() // Ensure activeDocument is available here
+            const response = await sendMessage(userMessage, activeDocument, attachmentsToSend)
             addMessage('assistant', response)
         } catch (error) {
             addMessage(
@@ -76,6 +159,39 @@ export default function AIPanel() {
         }
     }
 
+    const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files && e.target.files.length > 0) {
+            const files = Array.from(e.target.files)
+
+            for (const file of files) {
+                // Support Images and PDFs
+                if (!file.type.startsWith('image/') && file.type !== 'application/pdf') {
+                    console.warn('Unsupported file type:', file.type)
+                    continue
+                }
+
+                const reader = new FileReader()
+                reader.onload = (event) => {
+                    const base64String = event.target?.result as string
+                    const newAttachment: AIAttachment = {
+                        id: crypto.randomUUID(),
+                        name: file.name,
+                        mimeType: file.type,
+                        data: base64String
+                    }
+                    setPendingAttachments(prev => [...prev, newAttachment])
+                }
+                reader.readAsDataURL(file)
+            }
+            // Reset input so same file can be selected again
+            e.target.value = ''
+        }
+    }
+
+    const removeAttachment = (id: string) => {
+        setPendingAttachments(prev => prev.filter(att => att.id !== id))
+    }
+
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault()
@@ -85,6 +201,10 @@ export default function AIPanel() {
 
     // Apply AI-generated content to the active document (Append mode)
     const applyToDocument = (content: string) => {
+        const activeGroup = editorGroups.find(g => g.id === activeGroupId)
+        const activeTabId = activeGroup?.activeTabId
+        const activeDocument = getActiveDocument()
+
         if (!activeDocument || !activeTabId) return
 
         // Get current blocks and add new block with the content
@@ -99,31 +219,48 @@ export default function AIPanel() {
     }
 
     // Dispatch Batch AI Actions (Transactional)
-    const dispatchBatchActions = (actions: AIAction[]) => {
+    const dispatchBatchActions = (actions: AIAction[], messageId?: string) => {
         console.log('Dispatching Batch Actions:', actions)
-        if (!activeDocument) {
-            console.error('No active document found')
-            return
-        }
-        if (!activeTabId) {
-            console.error('No active tab ID found')
+        const activeDocument = getActiveDocument()
+        const activeGroup = editorGroups.find(g => g.id === activeGroupId)
+        const activeTabId = activeGroup?.activeTabId
+
+        // Check if there are document-editing actions that require an active document
+        const hasDocumentEditActions = actions.some(a =>
+            a.type === 'update' || a.type === 'insert' || a.type === 'delete'
+        )
+
+        if (hasDocumentEditActions && !activeDocument) {
+            console.error('Document edit actions require an active document')
             return
         }
 
-        let updatedBlocks = [...activeDocument.blocks]
+        // Save snapshot for undo (only if we have a document and editing it)
+        if (messageId && activeDocument && activeTabId && hasDocumentEditActions) {
+            const snapshot: UndoSnapshot = {
+                blocks: [...activeDocument.blocks],
+                tabId: activeTabId,
+                messageId: messageId
+            }
+            setUndoSnapshots(prev => new Map(prev).set(messageId, snapshot))
+        }
+
+        let updatedBlocks = activeDocument ? [...activeDocument.blocks] : []
         let modifiedCount = 0
+        let documentModified = false
 
-        // Apply actions sequentially to the copy
+        // Apply actions sequentially
         for (const action of actions) {
-            if (action.type === 'update' && action.id && action.content !== undefined) {
+            if (action.type === 'update' && action.id && action.content !== undefined && activeDocument) {
                 const index = updatedBlocks.findIndex(b => b.block_id === action.id)
                 if (index !== -1) {
                     updatedBlocks[index] = { ...updatedBlocks[index], content: action.content }
                     modifiedCount++
+                    documentModified = true
                 } else {
                     console.warn(`Update failed: Block ${action.id} not found`)
                 }
-            } else if (action.type === 'insert' && action.afterId && action.content !== undefined) {
+            } else if (action.type === 'insert' && action.afterId && action.content !== undefined && activeDocument) {
                 const index = updatedBlocks.findIndex((b) => b.block_id === action.afterId)
                 if (index !== -1) {
                     const newBlock: Block = {
@@ -133,24 +270,105 @@ export default function AIPanel() {
                     }
                     updatedBlocks.splice(index + 1, 0, newBlock)
                     modifiedCount++
+                    documentModified = true
                 } else {
-                    // Fallback: If afterId not found, try inserting at end? Or just fail safety.
                     console.warn(`Insert failed: Block ${action.afterId} not found`)
                 }
-            } else if (action.type === 'delete' && action.id) {
+            } else if (action.type === 'delete' && action.id && activeDocument) {
                 const initialLen = updatedBlocks.length
                 updatedBlocks = updatedBlocks.filter((b) => b.block_id !== action.id)
-                if (updatedBlocks.length < initialLen) modifiedCount++
+                if (updatedBlocks.length < initialLen) {
+                    modifiedCount++
+                    documentModified = true
+                }
+            } else if (action.type === 'create_file' && action.path && action.content !== undefined) {
+                // Handle file creation - works WITHOUT active document!
+                if (vaultPath) {
+                    const fullPath = action.path.startsWith('/') ? action.path : `${vaultPath}/${action.path}`
+                    window.api.createFile(fullPath, action.content)
+                        .then(() => {
+                            console.log(`Created file: ${fullPath}`)
+                            refreshTree()
+                        })
+                        .catch((err: any) => console.error(`Failed to create file: ${fullPath}`, err))
+                    modifiedCount++
+                }
+            } else if (action.type === 'create_folder' && action.path) {
+                // Handle folder creation - works WITHOUT active document!
+                if (vaultPath) {
+                    const fullPath = action.path.startsWith('/') ? action.path : `${vaultPath}/${action.path}`
+                    window.api.createFolder(fullPath)
+                        .then(() => {
+                            console.log(`Created folder: ${fullPath}`)
+                            refreshTree()
+                        })
+                        .catch((err: any) => console.error(`Failed to create folder: ${fullPath}`, err))
+                    modifiedCount++
+                }
+            } else if (action.type === 'update_meta' && action.metaField && action.metaValue !== undefined && activeTabId) {
+                // Handle metadata update - requires active document
+                const metaUpdates: Record<string, any> = {}
+                metaUpdates[action.metaField] = action.metaValue
+                updateDocumentMeta(activeTabId, metaUpdates)
+                modifiedCount++
+                console.log(`Updated metadata: ${action.metaField} = ${JSON.stringify(action.metaValue)}`)
             }
         }
 
-        if (modifiedCount > 0) {
+        // Only update document if we actually modified blocks
+        if (documentModified && activeTabId) {
             updateDocument(activeTabId, updatedBlocks)
+        }
+
+        if (modifiedCount > 0) {
             console.log(`Applied ${modifiedCount} changes successfully`)
         } else {
             console.warn('No changes were applied')
         }
     }
+
+    // Handle Undo - restore snapshot and truncate messages
+    const handleUndo = (snapshotKey: string) => {
+        const snapshot = undoSnapshots.get(snapshotKey)
+        if (!snapshot) {
+            console.error('Snapshot not found')
+            return
+        }
+
+        // Show confirmation alert
+        const confirmed = window.confirm(
+            '되돌리기를 하면 이 메시지 이후의 모든 대화가 삭제됩니다.\n계속하시겠습니까?'
+        )
+
+        if (!confirmed) return
+
+        // Restore document to snapshot
+        updateDocument(snapshot.tabId, snapshot.blocks)
+
+        // Truncate messages after the message that triggered this action
+        // We need to find the user message that preceded the assistant message
+        const currentSession = sessions.find(s => s.id === activeSessionId)
+        if (currentSession) {
+            const messageIndex = currentSession.messages.findIndex(m => m.id === snapshot.messageId)
+            if (messageIndex > 0) {
+                // Truncate to the user message before the assistant message
+                const userMessageId = currentSession.messages[messageIndex - 1].id
+                truncateMessagesAfter(userMessageId)
+            }
+        }
+
+        // Remove the snapshot
+        setUndoSnapshots(prev => {
+            const newMap = new Map(prev)
+            newMap.delete(snapshotKey)
+            return newMap
+        })
+
+        console.log('Undo completed')
+    }
+
+    // Check if a message has been applied (has a snapshot)
+    const hasSnapshot = (messageId: string) => undoSnapshots.has(messageId)
 
     // Extract code from code block
     const extractCodeContent = (code: string): string => {
@@ -158,7 +376,7 @@ export default function AIPanel() {
     }
 
     // Render markdown code blocks with copy and apply buttons
-    const renderMessage = (content: string) => {
+    const renderMessage = (content: string, messageId: string) => {
         // Updated regex to catch batch-action
         const codeBlockRegex = /```(\w+|json:batch-action)?\n([\s\S]*?)```/g
         const parts: React.ReactNode[] = []
@@ -203,7 +421,45 @@ export default function AIPanel() {
                             </div>
                             <div className="ai-action-content">
                                 {actions.map((action, i) => {
-                                    // Find old content if update/delete
+                                    // Handle File/Folder Creation
+                                    if (action.type === 'create_file' || action.type === 'create_folder') {
+                                        return (
+                                            <div key={i} className={`ai-diff-item ${action.type}`}>
+                                                <div className="ai-diff-header">
+                                                    {action.type === 'create_file' ? <File size={12} /> : <Folder size={12} />}
+                                                    <span className="ai-diff-type">{action.type.replace('_', ' ').toUpperCase()}</span>
+                                                </div>
+                                                <div className="ai-diff-body">
+                                                    <div className="ai-diff-new" style={{ fontWeight: 600 }}>{action.path}</div>
+                                                    {action.type === 'create_file' && (
+                                                        <div className="ai-diff-new" style={{ fontSize: '10px', opacity: 0.8 }}>
+                                                            {action.content?.slice(0, 100)}
+                                                            {(action.content?.length || 0) > 100 ? '...' : ''}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        )
+                                    }
+
+                                    // Handle Metadata Updates
+                                    if (action.type === 'update_meta') {
+                                        return (
+                                            <div key={i} className="ai-diff-item update_meta">
+                                                <div className="ai-diff-header">
+                                                    <Settings size={12} />
+                                                    <span className="ai-diff-type">UPDATE META</span>
+                                                </div>
+                                                <div className="ai-diff-body">
+                                                    <div className="ai-diff-new">
+                                                        <strong>{action.metaField}</strong>: {JSON.stringify(action.metaValue)}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )
+                                    }
+
+                                    // Handle Document Edits (Update, Insert, Delete)
                                     const oldBlock = activeDocument?.blocks.find(b => b.block_id === action.id)
 
                                     return (
@@ -245,13 +501,22 @@ export default function AIPanel() {
                                     )
                                 })}
                             </div>
-                            <button
-                                className="ai-action-apply-btn"
-                                onClick={() => dispatchBatchActions(actions)}
-                            >
-                                <Check size={12} /> Apply All Changes
-                            </button>
-                        </div>
+                            {hasSnapshot(messageId) ? (
+                                <button
+                                    className="ai-action-undo-btn"
+                                    onClick={() => handleUndo(messageId)}
+                                >
+                                    ↩ Undo Changes
+                                </button>
+                            ) : (
+                                <button
+                                    className="ai-action-apply-btn"
+                                    onClick={() => dispatchBatchActions(actions, messageId)}
+                                >
+                                    <Check size={12} /> Apply All Changes
+                                </button>
+                            )}
+                        </div >
                     )
                 } else {
                     parts.push(
@@ -349,6 +614,9 @@ export default function AIPanel() {
                 .ai-diff-item.update { border-left: 3px solid var(--color-info); }
                 .ai-diff-item.insert { border-left: 3px solid var(--color-success); }
                 .ai-diff-item.delete { border-left: 3px solid var(--color-danger); }
+                .ai-diff-item.create_file { border-left: 3px solid var(--color-accent); }
+                .ai-diff-item.create_folder { border-left: 3px solid var(--color-accent); }
+                .ai-diff-item.update_meta { border-left: 3px solid #8b5cf6; }
                 
                 .ai-diff-header {
                     display: flex;
@@ -404,21 +672,147 @@ export default function AIPanel() {
                 .ai-action-apply-btn:hover {
                     background: var(--color-accent-hover);
                 }
+                .ai-action-undo-btn {
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    gap: 6px;
+                    width: 100%;
+                    padding: 10px;
+                    background: #dc2626;
+                    color: white;
+                    border: none;
+                    border-top: 1px solid var(--color-border);
+                    font-size: var(--text-sm);
+                    font-weight: 600;
+                    cursor: pointer;
+                    transition: background 0.2s;
+                }
+                .ai-action-undo-btn:hover {
+                    background: #b91c1c;
+                }
+                
+                .ai-panel-title {
+                    flex: 1;
+                    white-space: nowrap;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    margin-right: 8px;
+                }
+
+                .ai-panel-action {
+                    background: transparent;
+                    border: none;
+                    color: var(--color-text-tertiary);
+                    cursor: pointer;
+                    padding: 4px;
+                    border-radius: 4px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                }
+                .ai-panel-action:hover {
+                    background: var(--color-bg-tertiary);
+                    color: var(--color-text-primary);
+                }
+                .ai-attach-btn {
+                    background: transparent;
+                    border: none;
+                    color: var(--color-text-tertiary);
+                    cursor: pointer;
+                    padding: 8px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                }
+                .ai-attach-btn:hover {
+                    color: var(--color-text-primary);
+                }
+                .pending-attachments {
+                    display: flex;
+                    flex-wrap: wrap;
+                    gap: 8px;
+                    padding: 0 8px 8px;
+                }
+                .pending-attachment {
+                    display: flex;
+                    align-items: center;
+                    gap: 6px;
+                    background: var(--color-bg-secondary);
+                    border: 1px solid var(--color-border);
+                    border-radius: 4px;
+                    padding: 4px 8px;
+                    font-size: 11px;
+                }
+                .remove-btn {
+                    background: transparent;
+                    border: none;
+                    cursor: pointer;
+                    color: var(--color-text-tertiary);
+                    padding: 0;
+                    display: flex;
+                }
+                .remove-btn:hover { color: var(--color-danger); }
+                
+                .ai-message-attachments {
+                    display: flex;
+                    flex-wrap: wrap;
+                    gap: 8px;
+                    margin-bottom: 8px;
+                }
+                .attachment-chip {
+                    display: flex;
+                    align-items: center;
+                    gap: 6px;
+                    background: rgba(0,0,0,0.1);
+                    padding: 4px 8px;
+                    border-radius: 4px;
+                    font-size: 11px;
+                }
+                .attachment-thumb {
+                    width: 20px;
+                    height: 20px;
+                    object-fit: cover;
+                    border-radius: 2px;
+                }
                 `}
             </style>
-            <div className="ai-panel">
+            <div
+                className="ai-panel"
+                style={{ width: panelWidth }}
+            >
+                {/* Resize Handle */}
+                <div
+                    className="ai-panel-resize-handle"
+                    onMouseDown={handleResizeStart}
+                />
+
                 <div className="ai-panel-header">
-                    <span className="ai-panel-title">AI Assistant</span>
-                    <div style={{ display: 'flex', gap: 8 }}>
+                    <span className="ai-panel-title" title={sessionTitle}>{sessionTitle}</span>
+                    <div style={{ display: 'flex', gap: 4 }}>
                         <button
-                            className="ai-panel-close"
+                            className="ai-panel-action"
+                            onClick={() => createSession()}
+                            title="New Chat"
+                        >
+                            <Plus size={16} />
+                        </button>
+                        <button
+                            className="ai-panel-action"
+                            onClick={() => setShowHistory(true)}
+                            title="History"
+                        >
+                            <History size={16} />
+                        </button>
+                        <button
+                            className="ai-panel-action"
                             onClick={() => setShowSettings(true)}
                             title="Settings"
                         >
-                            <Settings size={16} />
+                            <MoreHorizontal size={16} />
                         </button>
                         <button
-                            className="ai-panel-close"
+                            className="ai-panel-action"
                             onClick={closePanel}
                             title="Close (⌘E)"
                         >
@@ -464,8 +858,22 @@ export default function AIPanel() {
                     {messages.map((message) => (
                         <div key={message.id} className={`ai-message ${message.role}`}>
                             <div className="ai-message-content">
+                                {message.attachments && message.attachments.length > 0 && (
+                                    <div className="ai-message-attachments">
+                                        {message.attachments.map(att => (
+                                            <div key={att.id} className="attachment-chip">
+                                                {att.mimeType.startsWith('image/') ? (
+                                                    <img src={att.data} alt={att.name} className="attachment-thumb" />
+                                                ) : (
+                                                    <FileText size={14} />
+                                                )}
+                                                <span className="attachment-name">{att.name}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
                                 {message.role === 'assistant'
-                                    ? renderMessage(message.content)
+                                    ? renderMessage(message.content, message.id)
                                     : message.content}
                             </div>
                         </div>
@@ -521,21 +929,50 @@ export default function AIPanel() {
                         ))}
                     </div>
 
+                    {/* Pending Attachments Preview */}
+                    {pendingAttachments.length > 0 && (
+                        <div className="pending-attachments">
+                            {pendingAttachments.map(att => (
+                                <div key={att.id} className="pending-attachment">
+                                    <span className="attachment-name">{att.name}</span>
+                                    <button onClick={() => removeAttachment(att.id)} className="remove-btn">
+                                        <X size={12} />
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
                     <div className="ai-input-container">
+                        <input
+                            type="file"
+                            ref={fileInputRef}
+                            style={{ display: 'none' }}
+                            onChange={handleFileSelect}
+                            multiple
+                            accept="image/*,application/pdf"
+                        />
+                        <button
+                            className="ai-attach-btn"
+                            onClick={() => fileInputRef.current?.click()}
+                            title="Attach Image or PDF"
+                        >
+                            <Paperclip size={16} />
+                        </button>
                         <textarea
                             ref={inputRef}
                             className="ai-input"
                             value={input}
                             onChange={(e) => setInput(e.target.value)}
                             onKeyDown={handleKeyDown}
-                            placeholder="Ask me to write something..."
+                            placeholder="Ask me something..."
                             rows={1}
                             disabled={isLoading}
                         />
                         <button
                             className="ai-send-btn"
                             onClick={handleSubmit}
-                            disabled={!input.trim() || isLoading}
+                            disabled={(!input.trim() && pendingAttachments.length === 0) || isLoading}
                         >
                             <Send size={16} />
                         </button>
@@ -546,6 +983,11 @@ export default function AIPanel() {
             {showSettings && (
                 <SettingsModal onClose={() => setShowSettings(false)} />
             )}
+            {showHistory && (
+                <SessionHistoryModal onClose={() => setShowHistory(false)} />
+            )}
         </>
     )
 }
+
+

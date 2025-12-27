@@ -6,6 +6,8 @@ import { useVaultStore } from '../stores/vaultStore'
 // Define the window.api type locally to satisfy the linter if global augmentation is missing
 interface WindowAPI {
     readFile: (path: string) => Promise<string>
+    createFile: (path: string, content: string) => Promise<void>
+    createFolder: (path: string) => Promise<void>
 }
 declare global {
     interface Window {
@@ -28,32 +30,55 @@ function getAllFilePaths(nodes: FileNode[]): string[] {
     return paths
 }
 
-// Build context from all vault files
-async function getVaultContext(): Promise<string> {
-    const { fileTree } = useVaultStore.getState()
-    const paths = getAllFilePaths(fileTree)
+// Build smart context from vault using Always-on and Tag triggers
+async function getSmartContext(userMessage: string): Promise<string> {
+    const { documentIndex } = useVaultStore.getState()
 
-    // Limit to reasonable number of files to avoid context window explosion
-    // For now, let's take up to 20 files. In production this should be smarter (RAG).
-    const selectedPaths = paths.slice(0, 20)
+    if (!documentIndex || documentIndex.length === 0) {
+        return ''
+    }
 
-    const fileContents = await Promise.all(
-        selectedPaths.map(async (path) => {
-            try {
-                const content = await window.api.readFile(path)
-                // Extract filename for context
-                const filename = path.split('/').pop()
-                return `File: ${filename}\n---\n${content.slice(0, 1000)}\n---` // Limit each file to 1000 chars roughly
-            } catch (e) {
-                console.warn(`Failed to read file ${path}`, e)
-                return null
-            }
-        })
+    const contextDocs: string[] = []
+    const lowerMessage = userMessage.toLowerCase()
+
+    // 1. Always-on 문서 수집
+    const alwaysOnDocs = documentIndex.filter(d => d.alwaysOn)
+
+    // 2. 태그 트리거 매칭 (대소문자 무시)
+    const triggeredDocs = documentIndex.filter(d =>
+        !d.alwaysOn && // alwaysOn 문서는 이미 포함됨
+        d.tags.some(tag => lowerMessage.includes(tag.toLowerCase()))
     )
 
-    const validContents = fileContents.filter(Boolean).join('\n\n')
+    // 3. 중복 제거 후 합치기
+    const allDocs = [...alwaysOnDocs, ...triggeredDocs]
 
-    return validContents ? `## Vault Context (Related Files)\n\n${validContents}` : ''
+    // 최대 10개 문서로 제한
+    const limitedDocs = allDocs.slice(0, 10)
+
+    if (limitedDocs.length === 0) {
+        return ''
+    }
+
+    // 4. 각 문서 내용 로드
+    for (const doc of limitedDocs) {
+        try {
+            const content = await window.api.readFile(doc.path)
+            const isAlwaysOn = doc.alwaysOn ? ' [Always-on]' : ''
+            const matchedTags = doc.tags.filter(tag => lowerMessage.includes(tag.toLowerCase()))
+            const triggerInfo = matchedTags.length > 0 ? ` [Triggered by: ${matchedTags.join(', ')}]` : ''
+
+            contextDocs.push(`## ${doc.title}${isAlwaysOn}${triggerInfo}\n${content.slice(0, 3000)}`)
+        } catch (e) {
+            console.warn(`Failed to read ${doc.path}`, e)
+        }
+    }
+
+    if (contextDocs.length === 0) {
+        return ''
+    }
+
+    return `## Vault Context (Smart Context - ${contextDocs.length} documents)\n\n${contextDocs.join('\n\n---\n\n')}`
 }
 
 // Build context from document
@@ -95,10 +120,13 @@ ${blocksContent}
 }
 
 function buildChatHistory(): string {
-    const { messages } = useAIStore.getState()
+    const { sessions, activeSessionId } = useAIStore.getState()
+    const activeSession = sessions.find(s => s.id === activeSessionId)
+
+    if (!activeSession || activeSession.messages.length === 0) return ''
 
     // Filter out the very fast/transient checks if any, or just take last 10 messages
-    const recentMessages = messages.slice(-10)
+    const recentMessages = activeSession.messages.slice(-10)
 
     if (recentMessages.length === 0) return ''
 
@@ -110,11 +138,15 @@ ${recentMessages.map(m => `[${m.role.toUpperCase()}]: ${m.content}`).join('\n\n'
 `
 }
 
+import type { AIAttachment } from '../stores/aiStore'
+
 export async function sendMessage(
     userMessage: string,
-    activeDocument: Document | null
+    activeDocument: Document | null,
+    attachments: AIAttachment[] = []
 ): Promise<string> {
-    const { apiKey, customSystemPrompt, selectedModel } = useAIStore.getState()
+    const vaultPath = useVaultStore.getState().vaultPath
+    const { apiKey, customSystemPrompt, vaultSystemPrompts, selectedModel } = useAIStore.getState()
 
     if (!apiKey) {
         throw new Error('API key not set. Please configure your Gemini API key in settings.')
@@ -123,13 +155,19 @@ export async function sendMessage(
     const genAI = new GoogleGenerativeAI(apiKey)
     const model = genAI.getGenerativeModel({ model: selectedModel })
 
+    // Determine effective system prompt
+    let effectiveSystemPrompt = customSystemPrompt
+    if (vaultPath && vaultSystemPrompts[vaultPath]) {
+        effectiveSystemPrompt = vaultSystemPrompts[vaultPath]
+    }
+
     // Gather all contexts
     const activeDocContext = buildActiveDocumentContext(activeDocument)
     const chatHistory = buildChatHistory()
-    const vaultContext = await getVaultContext()
+    const vaultContext = await getSmartContext(userMessage)
 
-    const fullPrompt = `
-${customSystemPrompt}
+    const contextPart = `
+${effectiveSystemPrompt}
 
 ---
 
@@ -146,15 +184,30 @@ ${chatHistory}
 ---
 
 ## User Message (Respond to this)
-
-${userMessage}
 `
 
-    // Log the prompt for debugging
-    // console.log('Full Prompt sent to Gemini:', fullPrompt)
+    // Construct parts array
+    const parts: any[] = [{ text: contextPart }]
+
+    // Add attachments if any
+    if (attachments.length > 0) {
+        attachments.forEach(att => {
+            // Remove data:image/png;base64, prefix if present
+            const base64Data = att.data.split(',')[1] || att.data
+            parts.push({
+                inlineData: {
+                    mimeType: att.mimeType,
+                    data: base64Data
+                }
+            })
+        })
+    }
+
+    // Add user text message last
+    parts.push({ text: userMessage })
 
     try {
-        const result = await model.generateContent(fullPrompt)
+        const result = await model.generateContent(parts)
         const response = result.response
         const text = response.text()
 

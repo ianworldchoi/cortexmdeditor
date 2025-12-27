@@ -12,36 +12,36 @@
   --color-bg-glass: rgba(255, 255, 255, 0.6);
   --color-bg-hover: rgba(0, 0, 0, 0.04);
   --color-bg-active: rgba(0, 0, 0, 0.08);
-  
+
   --color-text-primary: rgba(0, 0, 0, 0.88);
   --color-text-secondary: rgba(0, 0, 0, 0.56);
   --color-text-tertiary: rgba(0, 0, 0, 0.36);
   --color-text-placeholder: rgba(0, 0, 0, 0.24);
-  
+
   --color-border: rgba(0, 0, 0, 0.08);
   --color-border-strong: rgba(0, 0, 0, 0.12);
   --color-divider: rgba(0, 0, 0, 0.06);
-  
-  --color-accent: #007AFF;
-  --color-accent-hover: #0066DD;
-  --color-accent-light: rgba(0, 122, 255, 0.12);
-  
+
+  --color-accent: #5367EB;
+  --color-accent-hover: #687BFB;
+  --color-accent-light: rgba(104, 123, 251, 0.12);
+
   --color-success: #34C759;
   --color-warning: #FF9500;
   --color-error: #FF3B30;
-  
+
   /* Shadows */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
   --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12);
   --shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.16);
-  
+
   /* Blur */
   --blur-sm: 8px;
   --blur-md: 16px;
   --blur-lg: 24px;
   --blur-xl: 40px;
-  
+
   /* Border Radius */
   --radius-xs: 4px;
   --radius-sm: 6px;
@@ -49,7 +49,7 @@
   --radius-lg: 14px;
   --radius-xl: 20px;
   --radius-full: 9999px;
-  
+
   /* Spacing */
   --space-1: 4px;
   --space-2: 8px;
@@ -60,11 +60,11 @@
   --space-8: 32px;
   --space-10: 40px;
   --space-12: 48px;
-  
+
   /* Typography */
   --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, sans-serif;
   --font-mono: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-  
+
   --text-xs: 11px;
   --text-sm: 13px;
   --text-base: 15px;
@@ -72,36 +72,40 @@
   --text-xl: 20px;
   --text-2xl: 24px;
   --text-3xl: 30px;
-  
+
   --leading-tight: 1.25;
   --leading-normal: 1.5;
   --leading-relaxed: 1.625;
-  
+
   /* Layout */
   --sidebar-width: 260px;
   --ai-panel-width: 380px;
   --tab-height: 40px;
   --titlebar-height: 52px;
-  
+
   /* Transitions */
   --duration-fast: 120ms;
   --duration-normal: 200ms;
   --duration-slow: 300ms;
   --duration-slower: 400ms;
-  
+
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 /* Reset & Base */
-*, *::before, *::after {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
 }
 
-html, body, #root {
+html,
+body,
+#root {
   height: 100%;
   width: 100%;
   overflow: hidden;
@@ -166,14 +170,16 @@ button:disabled {
 }
 
 /* Input Reset */
-input, textarea {
+input,
+textarea {
   font: inherit;
   color: inherit;
   background: none;
   border: none;
 }
 
-input:focus, textarea:focus {
+input:focus,
+textarea:focus {
   outline: none;
 }
 
@@ -222,6 +228,7 @@ a:hover {
     transform: translateX(100%);
     opacity: 0;
   }
+
   to {
     transform: translateX(0);
     opacity: 1;
@@ -233,6 +240,7 @@ a:hover {
     transform: translateX(0);
     opacity: 1;
   }
+
   to {
     transform: translateX(100%);
     opacity: 0;
@@ -240,13 +248,23 @@ a:hover {
 }
 
 @keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 @keyframes fadeOut {
-  from { opacity: 1; }
-  to { opacity: 0; }
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
 }
 
 @keyframes scaleIn {
@@ -254,6 +272,7 @@ a:hover {
     transform: scale(0.95);
     opacity: 0;
   }
+
   to {
     transform: scale(1);
     opacity: 1;
@@ -261,8 +280,15 @@ a:hover {
 }
 
 @keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.5;
+  }
 }
 
 /* Drag Region for macOS */

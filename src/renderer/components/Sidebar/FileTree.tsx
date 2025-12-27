@@ -7,12 +7,14 @@ import {
     ChevronDown,
     FilePlus,
     FolderPlus,
-    Trash2
+    Trash2,
+    Edit3
 } from 'lucide-react'
 import type { FileNode } from '@shared/types'
 import { useEditorStore } from '../../stores/editorStore'
 import { useVaultStore } from '../../stores/vaultStore'
 import CreateItemModal from './CreateItemModal'
+import RenameItemModal from './RenameItemModal'
 
 interface FileTreeProps {
     nodes: FileNode[]
@@ -40,14 +42,15 @@ function FileTreeItem({ node, level }: FileTreeItemProps) {
     const [showContextMenu, setShowContextMenu] = useState(false)
     const [contextMenuPos, setContextMenuPos] = useState({ x: 0, y: 0 })
     const [showCreateModal, setShowCreateModal] = useState<'file' | 'folder' | null>(null)
+    const [showRenameModal, setShowRenameModal] = useState(false)
 
-    const { openTab, tabs, activeTabId } = useEditorStore()
+    const { openTab, editorGroups, activeGroupId } = useEditorStore()
     const { moveItem, deleteItem } = useVaultStore()
     const itemRef = useRef<HTMLDivElement>(null)
 
-    const isActive = tabs.some(
-        (t) => t.filePath === node.path && t.id === activeTabId
-    )
+    const activeGroup = editorGroups.find(g => g.id === activeGroupId)
+    const activeTab = activeGroup?.tabs.find(t => t.id === activeGroup.activeTabId)
+    const isActive = activeTab?.filePath === node.path
 
     const handleClick = () => {
         if (node.isDirectory) {
@@ -166,6 +169,18 @@ function FileTreeItem({ node, level }: FileTreeItemProps) {
                         setShowCreateModal('folder')
                     }}
                     onDelete={handleDelete}
+                    onRename={() => {
+                        setShowContextMenu(false)
+                        setShowRenameModal(true)
+                    }}
+                />
+            )}
+
+            {/* Rename Modal */}
+            {showRenameModal && (
+                <RenameItemModal
+                    node={node}
+                    onClose={() => setShowRenameModal(false)}
                 />
             )}
 
@@ -189,6 +204,7 @@ interface ContextMenuProps {
     onClose: () => void
     onNewFile: () => void
     onNewFolder: () => void
+    onRename: () => void
     onDelete: () => void
 }
 
@@ -199,6 +215,7 @@ function ContextMenu({
     onClose,
     onNewFile,
     onNewFolder,
+    onRename,
     onDelete
 }: ContextMenuProps) {
     // Close on click outside
@@ -251,6 +268,13 @@ function ContextMenu({
                         />
                     </>
                 )}
+                <button
+                    className="context-menu-item"
+                    onClick={onRename}
+                >
+                    <Edit3 size={14} />
+                    <span>Rename</span>
+                </button>
                 <button
                     className="context-menu-item"
                     onClick={onDelete}

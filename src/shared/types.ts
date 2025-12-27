@@ -12,6 +12,7 @@ export type BlockType =
     | 'divider'
     | 'callout'
     | 'image'
+    | 'toggle'
 
 // A single block in the editor
 export interface Block {
@@ -20,6 +21,8 @@ export interface Block {
     content: string
     checked?: boolean // for todo blocks
     language?: string // for code blocks
+    alt?: string // for image blocks
+    collapsed?: boolean // for toggle blocks
     children?: Block[]
 }
 
@@ -30,6 +33,7 @@ export interface DocumentMeta {
     tags: string[]
     created_at: string
     updated_at: string
+    alwaysOn?: boolean  // AI 컨텍스트에 항상 포함
 }
 
 // Full document structure
@@ -86,3 +90,4 @@ export type IpcChannels =
     | 'file:create'
     | 'file:delete'
     | 'dialog:open-folder'
+    | 'dialog:open-file'

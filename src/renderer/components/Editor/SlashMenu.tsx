@@ -10,7 +10,9 @@ import {
     Quote,
     Code,
     Minus,
-    Lightbulb
+    Lightbulb,
+    Image as ImageIcon,
+    ChevronRight
 } from 'lucide-react'
 import type { BlockType } from '@shared/types'
 
@@ -35,10 +37,12 @@ const MENU_ITEMS: MenuItem[] = [
     { type: 'bullet', label: 'Bullet List', icon: <List size={16} />, shortcut: '-' },
     { type: 'numbered', label: 'Numbered List', icon: <ListOrdered size={16} />, shortcut: '1.' },
     { type: 'todo', label: 'To-do', icon: <CheckSquare size={16} />, shortcut: '[]' },
+    { type: 'toggle', label: 'Toggle', icon: <ChevronRight size={16} />, shortcut: '>>' },
     { type: 'quote', label: 'Quote', icon: <Quote size={16} />, shortcut: '>' },
     { type: 'code', label: 'Code', icon: <Code size={16} />, shortcut: '```' },
     { type: 'divider', label: 'Divider', icon: <Minus size={16} />, shortcut: '---' },
-    { type: 'callout', label: 'Callout', icon: <Lightbulb size={16} />, shortcut: '' }
+    { type: 'callout', label: 'Callout', icon: <Lightbulb size={16} />, shortcut: '' },
+    { type: 'image', label: 'Image', icon: <ImageIcon size={16} />, shortcut: '' }
 ]
 
 export default function SlashMenu({
@@ -130,7 +134,10 @@ export default function SlashMenu({
                     <div
                         key={item.type}
                         className={`slash-menu-item ${index === selectedIndex ? 'selected' : ''}`}
-                        onClick={() => onSelect(item.type)}
+                        onMouseDown={(e) => {
+                            e.preventDefault()
+                            onSelect(item.type)
+                        }}
                         onMouseEnter={() => setSelectedIndex(index)}
                     >
                         <span className="slash-menu-icon">{item.icon}</span>

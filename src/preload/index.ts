@@ -8,6 +8,9 @@ const api = {
     openFolderDialog: (): Promise<string | null> =>
         ipcRenderer.invoke('dialog:open-folder'),
 
+    openFileDialog: (): Promise<string | null> =>
+        ipcRenderer.invoke('dialog:open-file'),
+
     // Vault operations
     readVaultTree: (vaultPath: string): Promise<FileNode[]> =>
         ipcRenderer.invoke('vault:read-tree', vaultPath),

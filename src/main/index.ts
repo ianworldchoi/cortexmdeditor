@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, dialog, protocol, net } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import {
@@ -12,6 +12,20 @@ import {
     renameFile,
     pathExists
 } from './services/fileService'
+import { pathToFileURL } from 'url'
+
+// Register privileged schemes
+protocol.registerSchemesAsPrivileged([
+    {
+        scheme: 'media',
+        privileges: {
+            secure: true,
+            supportFetchAPI: true,
+            bypassCSP: true,
+            stream: true
+        }
+    }
+])
 
 let mainWindow: BrowserWindow | null = null
 
@@ -32,7 +46,8 @@ function createWindow(): void {
             preload: join(__dirname, '../preload/index.js'),
             sandbox: false,
             contextIsolation: true,
-            nodeIntegration: false
+            nodeIntegration: false,
+            webviewTag: true
         }
     })
 
@@ -59,6 +74,18 @@ function setupIpcHandlers(): void {
     ipcMain.handle('dialog:open-folder', async () => {
         const result = await dialog.showOpenDialog({
             properties: ['openDirectory', 'createDirectory']
+        })
+        if (result.canceled) return null
+        return result.filePaths[0]
+    })
+
+    // Open file dialog
+    ipcMain.handle('dialog:open-file', async () => {
+        const result = await dialog.showOpenDialog({
+            properties: ['openFile'],
+            filters: [
+                { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'] }
+            ]
         })
         if (result.canceled) return null
         return result.filePaths[0]
@@ -110,6 +137,16 @@ function setupIpcHandlers(): void {
     })
 }
 
+function setupProtocolHandlers(): void {
+    protocol.handle('media', (request) => {
+        const url = request.url.replace('media://', '')
+        // Decode URL to handle spaces and special characters
+        const decodedUrl = decodeURIComponent(url)
+        // Convert to file URL
+        return net.fetch(pathToFileURL(decodedUrl).toString())
+    })
+}
+
 app.whenReady().then(() => {
     // Set app user model id for windows
     electronApp.setAppUserModelId('com.cortex.app')
@@ -120,6 +157,7 @@ app.whenReady().then(() => {
     })
 
     setupIpcHandlers()
+    setupProtocolHandlers()
     createWindow()
 
     app.on('activate', () => {
