@@ -1,15 +1,22 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils, webFrame } from 'electron'
 import type { FileNode } from '@shared/types'
 
 // Expose protected methods that allow the renderer process to use
 // ipcRenderer without exposing the entire object
 const api = {
+    // Utilities
+    getFilePath: (file: File): string => webUtils.getPathForFile(file),
+
     // Dialog
     openFolderDialog: (): Promise<string | null> =>
         ipcRenderer.invoke('dialog:open-folder'),
 
     openFileDialog: (): Promise<string | null> =>
         ipcRenderer.invoke('dialog:open-file'),
+
+    openPdfDialog: (): Promise<string | null> =>
+        ipcRenderer.invoke('dialog:open-pdf'),
+
 
     // Vault operations
     readVaultTree: (vaultPath: string): Promise<FileNode[]> =>
@@ -45,8 +52,17 @@ const api = {
 
     // AI Operations
     processYouTubeUrl: (apiKey: string, url: string): Promise<{ strategy: string, url: string, fileUri?: string, mimeType?: string }> =>
-        ipcRenderer.invoke('ai:process-youtube-url', apiKey, url)
+        ipcRenderer.invoke('ai:process-youtube-url', apiKey, url),
 
+    // Image operations
+    copyImageToVault: (sourcePath: string, vaultPath: string): Promise<string> =>
+        ipcRenderer.invoke('image:copy-to-vault', sourcePath, vaultPath),
+
+    // Zoom controls
+    zoomIn: () => webFrame.setZoomLevel(webFrame.getZoomLevel() + 0.5),
+    zoomOut: () => webFrame.setZoomLevel(webFrame.getZoomLevel() - 0.5),
+    resetZoom: () => webFrame.setZoomLevel(0),
+    getZoomLevel: () => webFrame.getZoomLevel()
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

@@ -111,3 +111,35 @@ export async function pathExists(filePath: string): Promise<boolean> {
         return false
     }
 }
+
+/**
+ * Copy an image file to vault's attachments folder
+ * Returns the relative path to the copied image
+ */
+export async function copyImageToVault(sourcePath: string, vaultPath: string): Promise<string> {
+    // Create attachments folder if it doesn't exist
+    const attachmentsDir = path.join(vaultPath, 'attachments')
+    await fs.mkdir(attachmentsDir, { recursive: true })
+
+    // Get the original filename and extension
+    const originalName = path.basename(sourcePath)
+    const ext = path.extname(originalName)
+    const baseName = path.basename(originalName, ext)
+
+    // Generate unique filename if file already exists
+    let targetName = originalName
+    let targetPath = path.join(attachmentsDir, targetName)
+    let counter = 1
+
+    while (await pathExists(targetPath)) {
+        targetName = `${baseName}_${counter}${ext}`
+        targetPath = path.join(attachmentsDir, targetName)
+        counter++
+    }
+
+    // Copy the file
+    await fs.copyFile(sourcePath, targetPath)
+
+    // Return the relative path from vault root
+    return `attachments/${targetName}`
+}

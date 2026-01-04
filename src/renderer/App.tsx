@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { PanelRight } from 'lucide-react'
+import { PanelRight, ChevronsUpDown, PanelLeft } from 'lucide-react'
 import { useVaultStore } from './stores/vaultStore'
 import { useAIStore } from './stores/aiStore'
 import { useEditorStore } from './stores/editorStore'
@@ -27,7 +27,7 @@ export default function App() {
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             // Cmd/Ctrl + E: Toggle AI Panel
-            if ((e.metaKey || e.ctrlKey) && e.key === 'e') {
+            if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === 'e') {
                 e.preventDefault()
                 togglePanel()
             }
@@ -62,9 +62,15 @@ export default function App() {
             }
 
             // Cmd+\ : Split Editor Right
-            if ((e.metaKey || e.ctrlKey) && e.key === '\\') {
+            if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === '\\') {
                 e.preventDefault()
                 useEditorStore.getState().splitEditorRight()
+            }
+
+            // Cmd+Shift+\ (or |) : Toggle Sidebar
+            if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === '\\' || e.key === '|')) {
+                e.preventDefault()
+                useVaultStore.getState().toggleSidebar()
             }
 
             // Cmd+Shift+B : Open Browser Tab
@@ -85,11 +91,35 @@ export default function App() {
         }
     }, [])
 
+    const { openVault, toggleSidebar, isSidebarCollapsed } = useVaultStore()
+
     return (
         <div className="app-container">
             {/* Titlebar drag region */}
             <div className="titlebar titlebar-drag-region">
                 <div className="titlebar-content">
+                    {/* Left Controls */}
+                    <button
+                        className={`titlebar-button ${!isSidebarCollapsed ? 'active' : ''}`}
+                        onClick={toggleSidebar}
+                        title={isSidebarCollapsed ? "Expand Sidebar (Cmd+\\)" : "Collapse Sidebar (Cmd+\\)"}
+                        style={{ marginRight: 'var(--space-2)' }}
+                    >
+                        <PanelLeft size={16} />
+                    </button>
+
+                    {/* Vault Selector Chip */}
+                    <button
+                        className="vault-chip"
+                        onClick={openVault}
+                        title="Switch Vault"
+                    >
+                        <span className="vault-chip-text">
+                            {vaultPath ? vaultPath.split('/').pop() : 'Vault'}
+                        </span>
+                        <ChevronsUpDown size={14} style={{ opacity: 0.8 }} />
+                    </button>
+
                     <span className="titlebar-title">Cortex</span>
                 </div>
 
@@ -122,7 +152,7 @@ export default function App() {
                 </div>
 
                 {/* AI Panel */}
-                {isPanelOpen && <AIPanel />}
+                <AIPanel />
             </div>
         </div>
     )

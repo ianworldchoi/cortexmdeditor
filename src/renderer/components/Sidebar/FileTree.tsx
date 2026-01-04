@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect, useLayoutEffect } from 'react'
 import {
     Folder,
     FolderOpen,
@@ -19,13 +19,14 @@ import RenameItemModal from './RenameItemModal'
 interface FileTreeProps {
     nodes: FileNode[]
     level?: number
+    collapseAll?: number  // 값이 변경되면 모든 폴더를 접음
 }
 
-export default function FileTree({ nodes, level = 0 }: FileTreeProps) {
+export default function FileTree({ nodes, level = 0, collapseAll }: FileTreeProps) {
     return (
         <div className="file-tree" style={{ paddingLeft: level > 0 ? 12 : 0 }}>
             {nodes.map((node) => (
-                <FileTreeItem key={node.path} node={node} level={level} />
+                <FileTreeItem key={node.path} node={node} level={level} collapseAll={collapseAll} />
             ))}
         </div>
     )
@@ -34,10 +35,11 @@ export default function FileTree({ nodes, level = 0 }: FileTreeProps) {
 interface FileTreeItemProps {
     node: FileNode
     level: number
+    collapseAll?: number
 }
 
-function FileTreeItem({ node, level }: FileTreeItemProps) {
-    const [isExpanded, setIsExpanded] = useState(level < 2)
+function FileTreeItem({ node, level, collapseAll }: FileTreeItemProps) {
+    const [isExpanded, setIsExpanded] = useState(false)  // 디폴트: 접혀있음
     const [isDragOver, setIsDragOver] = useState(false)
     const [showContextMenu, setShowContextMenu] = useState(false)
     const [contextMenuPos, setContextMenuPos] = useState({ x: 0, y: 0 })
@@ -51,6 +53,13 @@ function FileTreeItem({ node, level }: FileTreeItemProps) {
     const activeGroup = editorGroups.find(g => g.id === activeGroupId)
     const activeTab = activeGroup?.tabs.find(t => t.id === activeGroup.activeTabId)
     const isActive = activeTab?.filePath === node.path
+
+    // collapseAll prop이 변경되면 모든 폴더를 접음
+    useEffect(() => {
+        if (collapseAll !== undefined && node.isDirectory) {
+            setIsExpanded(false)
+        }
+    }, [collapseAll, node.isDirectory])
 
     const handleClick = () => {
         if (node.isDirectory) {
@@ -149,7 +158,7 @@ function FileTreeItem({ node, level }: FileTreeItemProps) {
 
             {node.isDirectory && isExpanded && node.children && (
                 <div className="file-tree-children">
-                    <FileTree nodes={node.children} level={level + 1} />
+                    <FileTree nodes={node.children} level={level + 1} collapseAll={collapseAll} />
                 </div>
             )}
 
@@ -218,6 +227,37 @@ function ContextMenu({
     onRename,
     onDelete
 }: ContextMenuProps) {
+    const menuRef = useRef<HTMLDivElement>(null)
+    const [adjustedPos, setAdjustedPos] = useState<{ x: number; y: number } | null>(null)
+
+    // Adjust position if menu would overflow viewport
+    useLayoutEffect(() => {
+        if (menuRef.current) {
+            const rect = menuRef.current.getBoundingClientRect()
+            const viewportHeight = window.innerHeight
+            const viewportWidth = window.innerWidth
+
+            let newX = x
+            let newY = y
+
+            // Check bottom overflow - open menu upward if near bottom
+            if (y + rect.height > viewportHeight - 10) {
+                // Open upward: place bottom of menu at cursor position
+                newY = y - rect.height
+                // Ensure it doesn't go above viewport
+                if (newY < 10) newY = 10
+            }
+
+            // Check right overflow
+            if (x + rect.width > viewportWidth - 10) {
+                newX = x - rect.width
+                if (newX < 10) newX = 10
+            }
+
+            setAdjustedPos({ x: newX, y: newY })
+        }
+    }, [x, y])
+
     // Close on click outside
     const handleClickOutside = () => {
         onClose()
@@ -234,11 +274,13 @@ function ContextMenu({
                 onClick={handleClickOutside}
             />
             <div
+                ref={menuRef}
                 className="context-menu"
                 style={{
                     position: 'fixed',
-                    left: x,
-                    top: y,
+                    left: adjustedPos?.x ?? x,
+                    top: adjustedPos?.y ?? y,
+                    visibility: adjustedPos ? 'visible' : 'hidden',
                     zIndex: 100,
                     background: 'var(--color-bg-primary)',
                     backdropFilter: 'blur(var(--blur-lg))',
@@ -287,3 +329,4 @@ function ContextMenu({
         </>
     )
 }
+

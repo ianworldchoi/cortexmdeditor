@@ -5,41 +5,163 @@
 
 /* CSS Variables - Design Tokens */
 :root {
-  /* Colors - Light Theme */
-  --color-bg-primary: rgba(255, 255, 255, 0.72);
-  --color-bg-secondary: rgba(255, 255, 255, 0.56);
-  --color-bg-tertiary: rgba(255, 255, 255, 0.4);
+  /* ========================================
+     Reference Colors - Gray Scale
+     0 = white, 24 = black (단일 레퍼런스)
+     ======================================== */
+  --gray-0: #FFFFFF;
+  --gray-1: #f8f8f8;
+  --gray-2: #F0F0F0;
+  --gray-3: #E8E8E8;
+  --gray-4: #E0E0E0;
+  --gray-5: #D8D8D8;
+  --gray-6: #D0D0D0;
+  --gray-7: #C0C0C0;
+  --gray-8: #B0B0B0;
+  --gray-9: #A0A0A0;
+  --gray-10: #909090;
+  --gray-11: #808080;
+  --gray-12: #707070;
+  --gray-13: #606060;
+  --gray-14: #505050;
+  --gray-15: #404040;
+  --gray-16: #383838;
+  --gray-17: #303030;
+  --gray-18: #282828;
+  --gray-19: #202020;
+  --gray-20: #181818;
+  --gray-21: #141414;
+  --gray-22: #101010;
+  --gray-23: #0A0A0A;
+  --gray-24: #000000;
+
+  /* ========================================
+     Semantic Colors - Backgrounds (Light)
+     ======================================== */
+  --color-bg-primary: var(--gray-0);
+  --color-bg-secondary: var(--gray-1);
+  --color-bg-tertiary: var(--gray-2);
   --color-bg-glass: rgba(255, 255, 255, 0.6);
   --color-bg-hover: rgba(0, 0, 0, 0.04);
   --color-bg-active: rgba(0, 0, 0, 0.08);
 
-  --color-bg-sidebar: rgba(247, 247, 247, 0.895);
-  --color-bg-editor: #FFFFFF;
+  --color-bg-sidebar: var(--gray-1);
+  --color-bg-editor: var(--gray-0);
 
-  --color-app-gradient: linear-gradient(180deg, #f5f5f7 0%, #e8e8ed 100%);
+  --color-app-gradient: linear-gradient(180deg, var(--primary-0-light) 0%, transparent 60%);
 
-  --color-text-primary: rgba(0, 0, 0, 0.88);
-  --color-text-secondary: rgba(0, 0, 0, 0.56);
-  --color-text-tertiary: rgba(0, 0, 0, 0.36);
-  --color-text-placeholder: rgba(0, 0, 0, 0.24);
+  --color-text-primary: var(--gray-22);
+  --color-text-secondary: var(--gray-13);
+  --color-text-tertiary: var(--gray-10);
+  --color-text-placeholder: var(--gray-8);
+  --color-text-inverted: var(--gray-0);
 
   --color-border: rgba(0, 0, 0, 0.08);
-  --color-border-strong: rgba(0, 0, 0, 0.12);
-  --color-divider: rgba(0, 0, 0, 0.06);
+  --color-border-strong: rgba(0, 0, 0, 0.22);
+  --color-border-normal: rgba(0, 0, 0, 0.12);
+  --color-divider: rgba(0, 0, 0, 0.1);
 
-  --color-accent: #566dff;
-  --color-accent-hover: #687BFB;
-  --color-accent-light: rgba(104, 123, 251, 0.12);
+  --color-common-white: var(--gray-0);
+  --color-common-black: var(--gray-24);
 
-  --color-success: #34C759;
-  --color-warning: #FF9500;
-  --color-error: #FF3B30;
+
+  /* ========================================
+     Reference Colors - Primary Scale
+     0 = lightest, 7 = base (#29a96e), 14 = darkest
+     ======================================== */
+  --primary-0-light: #eef5f3;
+  --primary-0: #effcf5;
+  --primary-1: #dcf7ea;
+  --primary-2: #baedda;
+  --primary-3: #95e2c5;
+  --primary-4: #75e6ad;
+  --primary-5: #5bd498;
+  --primary-6: #42bf83;
+  --primary-7: #29a96e;
+  --primary-8: #20915d;
+  --primary-9: #187a4d;
+  --primary-10: #10633e;
+  --primary-11: #0a4f30;
+  --primary-12: #053b23;
+  --primary-13: #022616;
+  --primary-14: #00120a;
+
+  /* ========================================
+     Reference Colors - Yellow Scale
+     0 = lightest (#FEFFE4), 10 = darkest (#151512)
+     ======================================== */
+  --yellow-0: #FEFFE4;
+  --yellow-1: #E8E6C4;
+  --yellow-2: #D2CDA5;
+  --yellow-3: #BCB486;
+  --yellow-4: #A69B68;
+  --yellow-5: #90824B;
+  --yellow-6: #7A6A30;
+  --yellow-7: #645218;
+  --yellow-8: #4E3B05;
+  --yellow-9: #322800;
+  --yellow-10: #151512;
+
+  /* ========================================
+     Reference Colors - Red Scale
+     ======================================== */
+  --red-0: #FFEBEE;
+  --red-1: #FFCDD2;
+  --red-2: #EF9A9A;
+  --red-3: #E57373;
+  --red-4: #EF5350;
+  --red-5: #F44336;
+  --red-6: #E53935;
+  --red-7: #D32F2F;
+  --red-8: #C62828;
+  --red-9: #B71C1C;
+
+  /* ========================================
+     Reference Colors - Blue Scale
+     ======================================== */
+  --blue-0: #E3F2FD;
+  --blue-1: #BBDEFB;
+  --blue-2: #90CAF9;
+  --blue-3: #64B5F6;
+  --blue-4: #42A5F5;
+  --blue-5: #2196F3;
+  --blue-6: #1E88E5;
+  --blue-7: #1976D2;
+  --blue-8: #1565C0;
+  --blue-9: #0D47A1;
+
+  /* ========================================
+     Reference Colors - Green Scale
+     ======================================== */
+  --green-0: #E8F5E9;
+  --green-1: #C8E6C9;
+  --green-2: #A5D6A7;
+  --green-3: #81C784;
+  --green-4: #66BB6A;
+  --green-5: #4CAF50;
+  --green-6: #43A047;
+  --green-7: #388E3C;
+  --green-8: #2E7D32;
+  --green-9: #1B5E20;
+
+  /* Semantic - Accent */
+  --color-accent: var(--primary-7);
+  --color-accent-hover: var(--primary-6);
+  --color-accent-light: var(--primary-1);
+
+  /* Semantic - Highlight Colors */
+  --color-highlight-yellow: var(--yellow-0);
+  --color-highlight-red: var(--red-1);
+  --color-highlight-blue: var(--blue-1);
+  --color-highlight-green: var(--green-1);
 
   /* Shadows */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
-  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12);
+  --shadow-md: 0 4px 24px -1px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 8px 24px -2px rgba(0, 0, 0, 0.12);
   --shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.16);
+  --shadow-active: 0 2px 8px -2px rgba(0, 0, 0, 0.15);
+  --shadow-card: 0 0 0 0.2px var(--color-border-normal), 0 2px 8px rgba(0, 0, 0, 0.08);
 
   /* Blur */
   --blur-sm: 8px;
@@ -50,8 +172,11 @@
   /* Border Radius */
   --radius-xs: 4px;
   --radius-sm: 6px;
+  --radius-sm-plus: 8px;
   --radius-md: 10px;
+  --radius-md-plus: 12px;
   --radius-lg: 14px;
+  --radius-lg-plus: 16px;
   --radius-xl: 20px;
   --radius-full: 9999px;
 
@@ -101,43 +226,58 @@
 
 /* Dark Theme Overrides */
 [data-theme='dark'] {
-  /* Colors - Dark Theme */
-  --color-bg-primary: rgba(30, 30, 30, 0.72);
-  --color-bg-secondary: rgba(40, 40, 40, 0.56);
-  --color-bg-tertiary: rgba(50, 50, 50, 0.4);
+  /* ========================================
+     Semantic Colors - Backgrounds (Dark)
+     ======================================== */
+  --color-bg-primary: var(--gray-20);
+  --color-bg-secondary: var(--gray-19);
+  --color-bg-tertiary: var(--gray-17);
   --color-bg-glass: rgba(30, 30, 32, 0.6);
   --color-bg-hover: rgba(255, 255, 255, 0.08);
-  --color-bg-active: rgba(255, 255, 255, 0.12);
+  --color-bg-active: rgba(255, 255, 255, 0.08);
 
-  --color-bg-sidebar: var(--color-bg-glass);
-  --color-bg-editor: transparent;
+  --color-bg-sidebar: var(--gray-19);
+  --color-bg-editor: var(--gray-18);
 
-  --color-text-primary: rgba(255, 255, 255, 0.92);
-  --color-text-secondary: rgba(255, 255, 255, 0.64);
-  --color-text-tertiary: rgba(255, 255, 255, 0.40);
-  --color-text-placeholder: rgba(255, 255, 255, 0.24);
+  --color-text-primary: var(--gray-1);
+  --color-text-secondary: var(--gray-9);
+  --color-text-tertiary: var(--gray-12);
+  --color-text-placeholder: var(--gray-14);
+  --color-text-inverted: var(--gray-0);
 
   --color-border: rgba(255, 255, 255, 0.10);
-  --color-border-strong: rgba(255, 255, 255, 0.16);
+  --color-border-normal: rgba(255, 255, 255, 0.16);
   --color-divider: rgba(255, 255, 255, 0.08);
 
-  --color-accent: #8494ff;
-  --color-accent-hover: #7D8EFC;
-  --color-accent-light: rgba(104, 123, 251, 0.20);
+  /* Semantic - Accent (Dark) */
+  --color-accent: var(--primary-7);
+  --color-accent-hover: var(--primary-8);
+  --color-accent-light: var(--primary-13);
+
+  /* Semantic - Highlight Colors (Dark) */
+  --color-highlight-yellow: var(--yellow-9);
+  --color-highlight-red: var(--red-8);
+  --color-highlight-blue: var(--blue-8);
+  --color-highlight-green: var(--green-8);
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
   --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
   --shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.6);
+  --shadow-card: 0 0 0 0.2px var(--color-border-normal), 0 2px 8px rgba(0, 0, 0, 0.4);
 
-  --color-app-gradient: linear-gradient(180deg, #1c1c1e 0%, #151515 100%);
+  --color-app-gradient: linear-gradient(180deg, var(--color-bg-sidebar) 0%, var(--color-bg-sidebar) 100%);
 }
 
 [data-theme='dark'] ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.2);
+  background: transparent;
 }
 
-[data-theme='dark'] ::-webkit-scrollbar-thumb:hover {
+[data-theme='dark'] *:hover::-webkit-scrollbar-thumb {
+  background: var(--color-bg-active);
+}
+
+[data-theme='dark'] *:hover::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.3);
 }
 
@@ -170,8 +310,8 @@ body {
 
 /* Scrollbar Styling */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 4px;
+  height: 4px;
 }
 
 ::-webkit-scrollbar-track {
@@ -179,15 +319,18 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.15);
+  background: transparent;
   border-radius: var(--radius-full);
-  border: 2px solid transparent;
-  background-clip: padding-box;
+  transition: background 0.2s;
 }
 
-::-webkit-scrollbar-thumb:hover {
+/* Show scrollbar on container hover */
+*:hover::-webkit-scrollbar-thumb {
+  background: var(--color-bg-active);
+}
+
+*:hover::-webkit-scrollbar-thumb:hover {
   background: rgba(0, 0, 0, 0.25);
-  background-clip: padding-box;
 }
 
 /* Selection */
@@ -223,6 +366,7 @@ textarea {
   color: inherit;
   background: none;
   border: none;
+  caret-color: var(--color-accent);
 }
 
 input:focus,
@@ -267,6 +411,10 @@ a:hover {
 
 .elevation-3 {
   box-shadow: var(--shadow-lg);
+}
+
+.shadow-card {
+  box-shadow: var(--shadow-card);
 }
 
 /* Animation Keyframes */
@@ -336,6 +484,24 @@ a:hover {
   50% {
     opacity: 0.5;
   }
+}
+
+@keyframes fileLoadReveal {
+  0% {
+    opacity: 0;
+    transform: translateY(0px);
+    filter: blur(40px);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+.animate-file-load {
+  animation: fileLoadReveal 0.5s ease-in-out forwards;
 }
 
 /* Drag Region for macOS */

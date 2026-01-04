@@ -12,7 +12,16 @@ export type BlockType =
     | 'divider'
     | 'callout'
     | 'image'
+    | 'file'
     | 'toggle'
+    | 'table'
+
+
+
+// Table cell structure
+export interface TableCell {
+    content: string
+}
 
 // A single block in the editor
 export interface Block {
@@ -24,6 +33,8 @@ export interface Block {
     alt?: string // for image blocks
     collapsed?: boolean // for toggle blocks
     children?: Block[]
+    tableData?: TableCell[][] // for table blocks (rows x cols)
+    indent?: number // Indentation level (0-based) for handling nested lists/blocks
 }
 
 // Document metadata from YAML frontmatter
@@ -34,6 +45,7 @@ export interface DocumentMeta {
     created_at: string
     updated_at: string
     alwaysOn?: boolean  // AI 컨텍스트에 항상 포함
+    [key: string]: any  // Allow custom metadata fields
 }
 
 // Full document structure
@@ -64,6 +76,17 @@ export interface BlockDiff {
     operation: 'replace' | 'insert' | 'delete'
     content?: string
     after_block_id?: string // for insert operation
+}
+
+// In-editor diff visualization
+export interface PendingDiff {
+    id: string
+    blockId: string // Target block ID for update/delete, afterBlockId for insert
+    type: 'update' | 'insert' | 'delete'
+    oldContent?: string // For update/delete
+    newContent?: string // For update/insert
+    blockType?: BlockType // For insert operations
+    status: 'pending'
 }
 
 // AI context types

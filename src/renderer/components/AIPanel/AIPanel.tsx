@@ -1,12 +1,17 @@
 import { useState, useRef, useEffect } from 'react'
-import { Settings, X, FileText, Library, Send, Zap, Sparkles, Plus, Check, Edit3, Trash2, File, Folder, History, MoreHorizontal, Paperclip } from 'lucide-react'
+import { Settings, X, FileText, Library, Send, ArrowRight, Zap, Sparkles, Plus, Check, Edit3, Trash2, File, Folder, History, MoreHorizontal, Paperclip, Globe, Square } from 'lucide-react'
 import { useVaultStore } from '../../stores/vaultStore'
 import { useAIStore, type AIModel, type AIAttachment } from '../../stores/aiStore'
 import SessionHistoryModal from './SessionHistoryModal'
 import { useEditorStore } from '../../stores/editorStore'
 import { sendMessage } from '../../services/geminiService'
 import SettingsModal from '../Settings/SettingsModal'
-import type { Block, BlockType } from '@shared/types'
+import MentionDropdown, { type MentionedItem } from './MentionDropdown'
+import type { Block, BlockType, PendingDiff } from '@shared/types'
+import { useDiffStore } from '../../stores/diffStore'
+import ReviewChangesModal from './ReviewChangesModal'
+import Button from '../common/Button'
+import { convertActionsToDiffs } from './diffHelpers'
 
 const MODEL_OPTIONS: { value: AIModel; label: string; icon: React.ReactNode }[] = [
     { value: 'gemini-3-flash-preview', label: 'Flash', icon: <Zap size={12} /> },
@@ -14,12 +19,12 @@ const MODEL_OPTIONS: { value: AIModel; label: string; icon: React.ReactNode }[] 
 ]
 
 interface AIAction {
-    type: 'update' | 'insert' | 'delete' | 'create_file' | 'create_folder' | 'update_meta'
+    type: 'update' | 'insert' | 'delete' | 'create_file' | 'create_folder' | 'update_meta' | 'update_file'
     id?: string
     afterId?: string
     content?: string
     blockType?: BlockType
-    path?: string // For file/folder creation
+    path?: string // For file/folder creation AND update_file
     metaField?: 'title' | 'tags' | 'alwaysOn' // For metadata update
     metaValue?: string | string[] | boolean // For metadata update
 }
@@ -38,10 +43,15 @@ export default function AIPanel() {
         setSelectedModel,
         panelWidth,
         setPanelWidth,
-        truncateMessagesAfter
+        truncateMessagesAfter,
+        isPanelOpen,
+        webSearchEnabled,
+        setWebSearchEnabled
     } = useAIStore()
     const { getActiveDocument, editorGroups, activeGroupId, updateDocument, updateDocumentMeta } = useEditorStore()
     const { refreshTree, vaultPath } = useVaultStore()
+    const { addDiffs, getDiffsForFile, acceptDiff, rejectDiff, clearDiffsForFile } = useDiffStore()
+
 
     // Get active document for use throughout the component
     const activeDocument = getActiveDocument()
@@ -90,13 +100,65 @@ export default function AIPanel() {
         resizeStartWidthRef.current = panelWidth
     }
 
+    const stopGeneration = () => {
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort()
+            abortControllerRef.current = null
+        }
+        setLoading(false)
+    }
+
     const [input, setInput] = useState('')
     const [showSettings, setShowSettings] = useState(false)
     const [showHistory, setShowHistory] = useState(false)
+    const [showReviewModal, setShowReviewModal] = useState(false)
+    const [pendingActions, setPendingActions] = useState<AIAction[]>([])
     const [pendingAttachments, setPendingAttachments] = useState<AIAttachment[]>([])
     const messagesEndRef = useRef<HTMLDivElement>(null)
     const inputRef = useRef<HTMLTextAreaElement>(null)
     const fileInputRef = useRef<HTMLInputElement>(null)
+    const abortControllerRef = useRef<AbortController | null>(null)
+
+    // Mention dropdown state
+    const [showMentionDropdown, setShowMentionDropdown] = useState(false)
+    const [mentionQuery, setMentionQuery] = useState('')
+    const [mentionedItems, setMentionedItems] = useState<MentionedItem[]>([])
+    const mentionStartRef = useRef<number | null>(null)
+
+    // Context chips (active doc + mentioned items)
+    interface ContextChip {
+        id: string
+        type: 'file' | 'folder'
+        name: string
+        path: string
+        icon?: React.ReactNode
+    }
+    const [contextChips, setContextChips] = useState<ContextChip[]>([])
+
+    // Auto-add active document to context
+    useEffect(() => {
+        if (activeDocument) {
+            const activeChip: ContextChip = {
+                id: `active-${activeDocument.filePath}`,
+                type: 'file',
+                name: activeDocument.filePath.split('/').pop() || 'Untitled',
+                path: activeDocument.filePath,
+                icon: <FileText size={14} />
+            }
+
+            // Only add if not already present
+            setContextChips(prev => {
+                const exists = prev.some(chip => chip.path === activeDocument.filePath)
+                if (!exists) {
+                    return [activeChip, ...prev.filter(c => !c.id.startsWith('active-'))]
+                }
+                return prev
+            })
+        } else {
+            // Remove active document chip if no active doc
+            setContextChips(prev => prev.filter(c => !c.id.startsWith('active-')))
+        }
+    }, [activeDocument])
 
     // Snapshot for undo functionality
     interface UndoSnapshot {
@@ -129,7 +191,7 @@ export default function AIPanel() {
     const vaultDocCount = editorGroups.reduce((acc, group) => acc + group.tabs.length, 0)
 
     const handleSubmit = async () => {
-        if ((!input.trim() && pendingAttachments.length === 0) || isLoading) return
+        if ((!input.trim() && pendingAttachments.length === 0 && mentionedItems.length === 0) || isLoading) return
 
         if (!apiKey) {
             setShowSettings(true)
@@ -138,65 +200,187 @@ export default function AIPanel() {
 
         const userMessage = input.trim()
         const attachmentsToSend = [...pendingAttachments]
+        const mentionsToSend = [...mentionedItems]
 
         setInput('')
         setPendingAttachments([])
+        setMentionedItems([])
 
         addMessage('user', userMessage, attachmentsToSend)
         setLoading(true)
 
+        // Create new AbortController
+        const controller = new AbortController()
+        abortControllerRef.current = controller
+
         try {
-            const activeDocument = getActiveDocument() // Ensure activeDocument is available here
-            const response = await sendMessage(userMessage, activeDocument, attachmentsToSend)
+            const activeDocument = getActiveDocument()
+            const response = await sendMessage(
+                userMessage,
+                activeDocument,
+                attachmentsToSend,
+                mentionsToSend,
+                controller.signal
+            )
             addMessage('assistant', response)
         } catch (error) {
-            addMessage(
-                'assistant',
-                `Error: ${error instanceof Error ? error.message : 'Failed to get response'}`
-            )
+            if (error instanceof Error && error.name === 'AbortError') {
+                console.log('Generation aborted by user')
+                // Optional: Add a system message saying "Generation stopped"
+            } else {
+                addMessage(
+                    'assistant',
+                    `Error: ${error instanceof Error ? error.message : 'Failed to get response'}`
+                )
+            }
         } finally {
             setLoading(false)
+            abortControllerRef.current = null
+        }
+    }
+
+    const processFiles = (files: File[]) => {
+        for (const file of files) {
+            // Support Images and PDFs
+            if (!file.type.startsWith('image/') && file.type !== 'application/pdf') {
+                console.warn('Unsupported file type:', file.type)
+                continue
+            }
+
+            const reader = new FileReader()
+            reader.onload = (event) => {
+                const base64String = event.target?.result as string
+                const newAttachment: AIAttachment = {
+                    id: crypto.randomUUID(),
+                    name: file.name,
+                    mimeType: file.type,
+                    data: base64String
+                }
+                setPendingAttachments(prev => [...prev, newAttachment])
+            }
+            reader.readAsDataURL(file)
         }
     }
 
     const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files && e.target.files.length > 0) {
             const files = Array.from(e.target.files)
-
-            for (const file of files) {
-                // Support Images and PDFs
-                if (!file.type.startsWith('image/') && file.type !== 'application/pdf') {
-                    console.warn('Unsupported file type:', file.type)
-                    continue
-                }
-
-                const reader = new FileReader()
-                reader.onload = (event) => {
-                    const base64String = event.target?.result as string
-                    const newAttachment: AIAttachment = {
-                        id: crypto.randomUUID(),
-                        name: file.name,
-                        mimeType: file.type,
-                        data: base64String
-                    }
-                    setPendingAttachments(prev => [...prev, newAttachment])
-                }
-                reader.readAsDataURL(file)
-            }
+            processFiles(files)
             // Reset input so same file can be selected again
             e.target.value = ''
         }
     }
+
+    const handlePaste = (e: React.ClipboardEvent) => {
+        if (e.clipboardData.files && e.clipboardData.files.length > 0) {
+            e.preventDefault()
+            const files = Array.from(e.clipboardData.files)
+            processFiles(files)
+        }
+    }
+
+    const handleDrop = (e: React.DragEvent) => {
+        e.preventDefault()
+        e.stopPropagation()
+        setIsDragging(false)
+
+        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+            const files = Array.from(e.dataTransfer.files)
+            processFiles(files)
+        }
+    }
+
+    const handleDragOver = (e: React.DragEvent) => {
+        e.preventDefault()
+        e.stopPropagation()
+        setIsDragging(true)
+    }
+
+    const handleDragLeave = (e: React.DragEvent) => {
+        e.preventDefault()
+        e.stopPropagation()
+        setIsDragging(false)
+    }
+
+    const [isDragging, setIsDragging] = useState(false)
 
     const removeAttachment = (id: string) => {
         setPendingAttachments(prev => prev.filter(att => att.id !== id))
     }
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
+        // Don't submit if mention dropdown is open (let dropdown handle navigation)
+        if (showMentionDropdown) {
+            if (e.key === 'Escape') {
+                e.preventDefault()
+                closeMentionDropdown()
+            }
+            // Let arrow keys and Enter propagate to dropdown
+            if (['ArrowUp', 'ArrowDown', 'Enter', 'Tab'].includes(e.key)) {
+                return
+            }
+        }
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault()
             handleSubmit()
         }
+    }
+
+    // Handle input change with @ detection
+    const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+        const value = e.target.value
+        const cursorPos = e.target.selectionStart || 0
+        setInput(value)
+
+        // Auto-resize
+        e.target.style.height = 'auto'
+        e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'
+
+        // Detect @ trigger
+        const textBeforeCursor = value.slice(0, cursorPos)
+        const atMatch = textBeforeCursor.match(/@([\w:]*)?$/)
+
+        if (atMatch) {
+            mentionStartRef.current = cursorPos - atMatch[0].length
+            setMentionQuery(atMatch[1] || '')
+            setShowMentionDropdown(true)
+        } else {
+            setShowMentionDropdown(false)
+            mentionStartRef.current = null
+        }
+    }
+
+    const handleMentionSelect = (item: MentionedItem) => {
+        // Remove the @ trigger from input and add to mentioned items
+        if (mentionStartRef.current !== null) {
+            const before = input.slice(0, mentionStartRef.current)
+            const after = input.slice(inputRef.current?.selectionStart || input.length)
+            setInput(before + after)
+        }
+
+        // Add to mentioned items (avoid duplicates)
+        setMentionedItems(prev => {
+            if (prev.some(i => i.path === item.path)) return prev
+            return [...prev, item]
+        })
+
+        closeMentionDropdown()
+        inputRef.current?.focus()
+    }
+
+    const closeMentionDropdown = () => {
+        setShowMentionDropdown(false)
+        setMentionQuery('')
+        mentionStartRef.current = null
+    }
+
+    const removeMentionedItem = (path: string) => {
+        setMentionedItems(prev => prev.filter(i => i.path !== path))
+    }
+
+    // Remove context chip
+    const removeContextChip = (chipId: string) => {
+        setContextChips(prev => prev.filter(c => c.id !== chipId))
     }
 
     // Apply AI-generated content to the active document (Append mode)
@@ -225,64 +409,55 @@ export default function AIPanel() {
         const activeGroup = editorGroups.find(g => g.id === activeGroupId)
         const activeTabId = activeGroup?.activeTabId
 
-        // Check if there are document-editing actions that require an active document
-        const hasDocumentEditActions = actions.some(a =>
+        // Separate document-editing actions from file/folder operations
+        const documentEditActions = actions.filter(a =>
             a.type === 'update' || a.type === 'insert' || a.type === 'delete'
         )
+        const otherActions = actions.filter(a =>
+            a.type !== 'update' && a.type !== 'insert' && a.type !== 'delete'
+        )
 
-        if (hasDocumentEditActions && !activeDocument) {
-            console.error('Document edit actions require an active document')
-            return
-        }
-
-        // Save snapshot for undo (only if we have a document and editing it)
-        if (messageId && activeDocument && activeTabId && hasDocumentEditActions) {
-            const snapshot: UndoSnapshot = {
-                blocks: [...activeDocument.blocks],
-                tabId: activeTabId,
-                messageId: messageId
+        // For document edits: Store as diffs instead of applying immediately
+        if (documentEditActions.length > 0) {
+            if (!activeDocument) {
+                console.error('Document edit actions require an active document')
+                return
             }
-            setUndoSnapshots(prev => new Map(prev).set(messageId, snapshot))
+
+            // Convert AI actions to PendingDiffs
+            const pendingDiffs: PendingDiff[] = documentEditActions.map(action => {
+                const diff: PendingDiff = {
+                    id: crypto.randomUUID(),
+                    blockId: action.id || action.afterId || '',
+                    type: action.type as 'update' | 'insert' | 'delete',
+                    status: 'pending'
+                }
+
+                if (action.type === 'update' && action.id) {
+                    const oldBlock = activeDocument.blocks.find(b => b.block_id === action.id)
+                    diff.oldContent = oldBlock?.content
+                    diff.newContent = action.content
+                } else if (action.type === 'insert') {
+                    diff.newContent = action.content
+                    diff.blockType = action.blockType
+                } else if (action.type === 'delete' && action.id) {
+                    const oldBlock = activeDocument.blocks.find(b => b.block_id === action.id)
+                    diff.oldContent = oldBlock?.content
+                }
+
+                return diff
+            })
+
+            // Store diffs in diffStore
+            addDiffs(activeDocument.filePath, pendingDiffs)
+            console.log(`Stored ${pendingDiffs.length} diffs for visual review`)
         }
 
-        let updatedBlocks = activeDocument ? [...activeDocument.blocks] : []
+        // For non-document-edit actions: Apply immediately as before
         let modifiedCount = 0
-        let documentModified = false
-
-        // Apply actions sequentially
-        for (const action of actions) {
-            if (action.type === 'update' && action.id && action.content !== undefined && activeDocument) {
-                const index = updatedBlocks.findIndex(b => b.block_id === action.id)
-                if (index !== -1) {
-                    updatedBlocks[index] = { ...updatedBlocks[index], content: action.content }
-                    modifiedCount++
-                    documentModified = true
-                } else {
-                    console.warn(`Update failed: Block ${action.id} not found`)
-                }
-            } else if (action.type === 'insert' && action.afterId && action.content !== undefined && activeDocument) {
-                const index = updatedBlocks.findIndex((b) => b.block_id === action.afterId)
-                if (index !== -1) {
-                    const newBlock: Block = {
-                        block_id: crypto.randomUUID(),
-                        type: action.blockType || 'text',
-                        content: action.content
-                    }
-                    updatedBlocks.splice(index + 1, 0, newBlock)
-                    modifiedCount++
-                    documentModified = true
-                } else {
-                    console.warn(`Insert failed: Block ${action.afterId} not found`)
-                }
-            } else if (action.type === 'delete' && action.id && activeDocument) {
-                const initialLen = updatedBlocks.length
-                updatedBlocks = updatedBlocks.filter((b) => b.block_id !== action.id)
-                if (updatedBlocks.length < initialLen) {
-                    modifiedCount++
-                    documentModified = true
-                }
-            } else if (action.type === 'create_file' && action.path && action.content !== undefined) {
-                // Handle file creation - works WITHOUT active document!
+        for (const action of otherActions) {
+            if (action.type === 'create_file' && action.path && action.content !== undefined) {
+                // Handle file creation
                 if (vaultPath) {
                     const fullPath = action.path.startsWith('/') ? action.path : `${vaultPath}/${action.path}`
                     window.api.createFile(fullPath, action.content)
@@ -294,7 +469,7 @@ export default function AIPanel() {
                     modifiedCount++
                 }
             } else if (action.type === 'create_folder' && action.path) {
-                // Handle folder creation - works WITHOUT active document!
+                // Handle folder creation
                 if (vaultPath) {
                     const fullPath = action.path.startsWith('/') ? action.path : `${vaultPath}/${action.path}`
                     window.api.createFolder(fullPath)
@@ -306,25 +481,68 @@ export default function AIPanel() {
                     modifiedCount++
                 }
             } else if (action.type === 'update_meta' && action.metaField && action.metaValue !== undefined && activeTabId) {
-                // Handle metadata update - requires active document
+                // Handle metadata update
                 const metaUpdates: Record<string, any> = {}
                 metaUpdates[action.metaField] = action.metaValue
                 updateDocumentMeta(activeTabId, metaUpdates)
                 modifiedCount++
                 console.log(`Updated metadata: ${action.metaField} = ${JSON.stringify(action.metaValue)}`)
+            } else if (action.type === 'update_file' && action.path && action.content !== undefined) {
+                // Handle file update
+                if (vaultPath) {
+                    const fullPath = action.path.startsWith('/') ? action.path : `${vaultPath}/${action.path}`
+                    window.api.createFile(fullPath, action.content)
+                        .then(() => {
+                            console.log(`Updated file: ${fullPath}`)
+                            refreshTree()
+                        })
+                        .catch((err: any) => console.error(`Failed to update file: ${fullPath}`, err))
+                    modifiedCount++
+                }
             }
         }
 
-        // Only update document if we actually modified blocks
-        if (documentModified && activeTabId) {
-            updateDocument(activeTabId, updatedBlocks)
+        if (documentEditActions.length > 0) {
+            console.log(`${documentEditActions.length} changes stored as diffs for review`)
+        }
+        if (modifiedCount > 0) {
+            console.log(`Applied ${modifiedCount} non-document changes immediately`)
+        }
+    }
+
+    // Apply all pending changes directly (for Apply All button)
+    const applyAllDiffs = (actions: AIAction[]) => {
+        const activeDocument = getActiveDocument()
+        const activeGroup = editorGroups.find(g => g.id === activeGroupId)
+        const activeTabId = activeGroup?.activeTabId
+
+        if (!activeDocument || !activeTabId) return
+
+        let updatedBlocks = [...activeDocument.blocks]
+
+        for (const action of actions) {
+            if (action.type === 'update' && action.id && action.content !== undefined) {
+                const index = updatedBlocks.findIndex(b => b.block_id === action.id)
+                if (index !== -1) {
+                    updatedBlocks[index] = { ...updatedBlocks[index], content: action.content }
+                }
+            } else if (action.type === 'insert' && action.afterId && action.content !== undefined) {
+                const index = updatedBlocks.findIndex(b => b.block_id === action.afterId)
+                if (index !== -1) {
+                    const newBlock: Block = {
+                        block_id: crypto.randomUUID(),
+                        type: action.blockType || 'text',
+                        content: action.content
+                    }
+                    updatedBlocks.splice(index + 1, 0, newBlock)
+                }
+            } else if (action.type === 'delete' && action.id) {
+                updatedBlocks = updatedBlocks.filter(b => b.block_id !== action.id)
+            }
         }
 
-        if (modifiedCount > 0) {
-            console.log(`Applied ${modifiedCount} changes successfully`)
-        } else {
-            console.warn('No changes were applied')
-        }
+        updateDocument(activeTabId, updatedBlocks)
+        console.log('Applied all changes directly')
     }
 
     // Handle Undo - restore snapshot and truncate messages
@@ -416,7 +634,6 @@ export default function AIPanel() {
                     parts.push(
                         <div key={match.index} className="ai-action-card">
                             <div className="ai-action-header">
-                                <Sparkles size={14} />
                                 <span>Suggested Changes ({actions.length})</span>
                             </div>
                             <div className="ai-action-content">
@@ -453,6 +670,25 @@ export default function AIPanel() {
                                                 <div className="ai-diff-body">
                                                     <div className="ai-diff-new">
                                                         <strong>{action.metaField}</strong>: {JSON.stringify(action.metaValue)}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )
+                                    }
+
+                                    // Handle File Updates (modify existing files by path)
+                                    if (action.type === 'update_file') {
+                                        return (
+                                            <div key={i} className="ai-diff-item update_file">
+                                                <div className="ai-diff-header">
+                                                    <Edit3 size={12} />
+                                                    <span className="ai-diff-type">UPDATE FILE</span>
+                                                </div>
+                                                <div className="ai-diff-body">
+                                                    <div className="ai-diff-new" style={{ fontWeight: 600 }}>{action.path}</div>
+                                                    <div className="ai-diff-new" style={{ fontSize: '10px', opacity: 0.8, maxHeight: 80, overflow: 'hidden' }}>
+                                                        {action.content?.slice(0, 200)}
+                                                        {(action.content?.length || 0) > 200 ? '...' : ''}
                                                     </div>
                                                 </div>
                                             </div>
@@ -501,21 +737,46 @@ export default function AIPanel() {
                                     )
                                 })}
                             </div>
-                            {hasSnapshot(messageId) ? (
-                                <button
-                                    className="ai-action-undo-btn"
-                                    onClick={() => handleUndo(messageId)}
-                                >
-                                    ↩ Undo Changes
-                                </button>
-                            ) : (
-                                <button
-                                    className="ai-action-apply-btn"
-                                    onClick={() => dispatchBatchActions(actions, messageId)}
-                                >
-                                    <Check size={12} /> Apply All Changes
-                                </button>
-                            )}
+                            <div className="ai-action-btn-wrapper">
+                                {hasSnapshot(messageId) ? (
+                                    <button
+                                        className="ai-action-undo-btn"
+                                        onClick={() => handleUndo(messageId)}
+                                    >
+                                        ↩ Undo Changes
+                                    </button>
+                                ) : (
+                                    <div style={{ display: 'flex', gap: '8px', width: '100%' }}>
+                                        <Button
+                                            variant="default"
+                                            onClick={() => {
+                                                const diffsToReview = convertActionsToDiffs(actions, activeDocument)
+                                                console.log('Review Changes clicked', { actions, diffsToReview })
+
+                                                if (activeDocument) {
+                                                    addDiffs(activeDocument.filePath, diffsToReview)
+                                                }
+
+                                                setPendingActions(actions)
+                                                setShowReviewModal(true)
+                                            }}
+                                            style={{ flex: 1 }}
+                                        >
+                                            Review Changes
+                                        </Button>
+                                        <Button
+                                            variant="primary"
+                                            onClick={() => {
+                                                applyAllDiffs(actions)
+                                                dispatchBatchActions(actions, messageId)
+                                            }}
+                                            style={{ flex: 1 }}
+                                        >
+                                            <Check size={12} /> Apply All
+                                        </Button>
+                                    </div>
+                                )}
+                            </div>
                         </div >
                     )
                 } else {
@@ -577,7 +838,7 @@ export default function AIPanel() {
             <style>
                 {`
                 .ai-action-card {
-                    background: var(--color-bg-secondary);
+                    background: transparent;
                     border: 1px solid var(--color-border);
                     border-radius: var(--radius-md);
                     margin: 8px 0;
@@ -590,7 +851,7 @@ export default function AIPanel() {
                     align-items: center;
                     gap: 6px;
                     padding: 8px 12px;
-                    background: var(--color-bg-tertiary);
+                    background: none
                     border-bottom: 1px solid var(--color-border);
                     font-size: var(--text-sm);
                     font-weight: 600;
@@ -605,18 +866,18 @@ export default function AIPanel() {
                     gap: 8px;
                 }
                 .ai-diff-item {
-                    border: 1px solid var(--color-border);
+                    border: none;
                     border-radius: var(--radius-sm);
-                    background: var(--color-bg-primary);
-                    padding: 8px;
+                    background: transparent;
+                    padding: 0;
                     font-size: var(--text-xs);
                 }
-                .ai-diff-item.update { border-left: 3px solid var(--color-info); }
-                .ai-diff-item.insert { border-left: 3px solid var(--color-success); }
-                .ai-diff-item.delete { border-left: 3px solid var(--color-danger); }
-                .ai-diff-item.create_file { border-left: 3px solid var(--color-accent); }
-                .ai-diff-item.create_folder { border-left: 3px solid var(--color-accent); }
-                .ai-diff-item.update_meta { border-left: 3px solid #8b5cf6; }
+                .ai-diff-item.update { border-left: none; }
+                .ai-diff-item.insert { border-left: none; }
+                .ai-diff-item.delete { border-left: none; }
+                .ai-diff-item.create_file { border-left: none; }
+                .ai-diff-item.create_folder { border-left: none; }
+                .ai-diff-item.update_meta { border-left: none; }
                 
                 .ai-diff-header {
                     display: flex;
@@ -638,19 +899,23 @@ export default function AIPanel() {
                     color: var(--color-text-tertiary);
                     background: rgba(255, 0, 0, 0.05);
                     padding: 4px;
-                    border-radius: 2px;
+                    border-radius: 6px;
                 }
                 .ai-diff-new {
                     color: var(--color-text-primary);
                     background: rgba(0, 255, 0, 0.05);
                     padding: 4px;
-                    border-radius: 2px;
+                    border-radius: 6px;
                     white-space: pre-wrap;
                 }
                 .ai-diff-arrow {
                     text-align: center;
                     font-size: 10px;
                     color: var(--color-text-tertiary);
+                }
+
+                .ai-action-btn-wrapper {
+                    padding: 8px 8px;
                 }
 
                 .ai-action-apply-btn {
@@ -668,6 +933,7 @@ export default function AIPanel() {
                     font-weight: 600;
                     cursor: pointer;
                     transition: background 0.2s;
+                    border-radius: 4px;
                 }
                 .ai-action-apply-btn:hover {
                     background: var(--color-accent-hover);
@@ -687,6 +953,7 @@ export default function AIPanel() {
                     font-weight: 600;
                     cursor: pointer;
                     transition: background 0.2s;
+                    border-radius: 4px;
                 }
                 .ai-action-undo-btn:hover {
                     background: #b91c1c;
@@ -779,8 +1046,49 @@ export default function AIPanel() {
             </style>
             <div
                 className="ai-panel"
-                style={{ width: panelWidth }}
+                style={{
+                    width: isPanelOpen ? panelWidth : 0,
+                    borderLeftWidth: isPanelOpen ? '0.5px' : '0px',
+                    margin: 0,
+                    padding: 0,
+                    position: 'relative' // Needed for overlay if we used one, but also good for boundary
+                }}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
             >
+                {/* Drag Overlay */}
+                {isDragging && (
+                    <div style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        background: 'var(--color-bg-primary)',
+                        opacity: 0.9,
+                        zIndex: 100,
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        pointerEvents: 'none' // Let events pass through to handle drop on parent
+                    }}>
+                        <div style={{
+                            border: '2px dashed var(--color-accent)',
+                            borderRadius: 'var(--radius-md)',
+                            padding: '40px',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'center',
+                            gap: '12px',
+                            color: 'var(--color-accent)'
+                        }}>
+                            <Plus size={48} />
+                            <span style={{ fontWeight: 600 }}>Drop files here</span>
+                        </div>
+                    </div>
+                )}
                 {/* Resize Handle */}
                 <div
                     className="ai-panel-resize-handle"
@@ -821,22 +1129,7 @@ export default function AIPanel() {
                     </div>
                 </div>
 
-                {/* Context Status Bar */}
-                <div className="ai-context-status" style={{
-                    padding: 'var(--space-2) var(--space-4)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    fontSize: 'var(--text-xs)',
-                    color: 'var(--color-text-tertiary)',
-                    borderBottom: '1px solid var(--color-divider)'
-                }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <FileText size={12} />
-                        <span>{activeDocument ? '1 File Selected' : 'No Active File'}</span>
-                    </div>
-                    {/* Placeholder for future diff counting or validation status */}
-                </div>
+
 
                 {/* Messages */}
                 <div className="ai-messages" style={{ flex: 1, overflowY: 'auto' }}>
@@ -850,7 +1143,7 @@ export default function AIPanel() {
                         >
                             <p style={{ marginBottom: 8 }}>Hi! I'm your AI assistant.</p>
                             <p style={{ fontSize: 'var(--text-sm)' }}>
-                                Ask me to write content and click "Apply" to add it to your document.
+                                Hi.
                             </p>
                         </div>
                     )}
@@ -896,7 +1189,7 @@ export default function AIPanel() {
                 </div>
 
                 {/* Input Area */}
-                <div className="ai-input-area" style={{ padding: 'var(--space-4)' }}>
+                <div className="ai-input-area">
                     {!apiKey && (
                         <div
                             style={{
@@ -928,27 +1221,108 @@ export default function AIPanel() {
                         </div>
                     )}
 
+                    {/* Mentioned Items Tags */}
+                    {mentionedItems.length > 0 && (
+                        <div className="mentioned-items" style={{
+                            display: 'flex',
+                            flexWrap: 'wrap',
+                            gap: 6,
+                            marginBottom: 8
+                        }}>
+                            {mentionedItems.map(item => (
+                                <div
+                                    key={item.path}
+                                    className="mentioned-tag"
+                                    style={{
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: 4,
+                                        padding: '4px 8px',
+                                        background: 'var(--color-accent-alpha)',
+                                        border: '1px solid var(--color-accent)',
+                                        borderRadius: 'var(--radius-sm)',
+                                        fontSize: 'var(--text-xs)',
+                                        color: 'var(--color-accent)'
+                                    }}
+                                >
+                                    {item.type === 'file' ? <FileText size={12} /> : <Folder size={12} />}
+                                    <span>{item.name}</span>
+                                    <button
+                                        onClick={() => removeMentionedItem(item.path)}
+                                        style={{
+                                            background: 'none',
+                                            border: 'none',
+                                            cursor: 'pointer',
+                                            padding: 0,
+                                            display: 'flex',
+                                            color: 'inherit'
+                                        }}
+                                    >
+                                        <X size={12} />
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
                     {/* Unified Input Container */}
-                    <div className="ai-input-container-unified" style={{
-                        border: '1px solid var(--color-border)',
-                        borderRadius: 'var(--radius-md)',
-                        background: 'var(--color-bg-primary)',
-                        display: 'flex',
-                        flexDirection: 'column',
-                    }}>
+                    <div className="ai-input-container"
+                        style={{
+                            border: `1px solid ${isDragging ? 'var(--color-accent)' : 'var(--color-border)'}`,
+
+                            background: isDragging ? 'var(--color-bg-secondary)' : 'var(--color-bg-primary)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            position: 'relative',
+                            transition: 'all 0.2s ease',
+                        }}
+                        onDragOver={handleDragOver}
+                        onDragLeave={handleDragLeave}
+                        onDrop={handleDrop}
+                    >
+                        {/* Mention Dropdown */}
+                        {showMentionDropdown && (
+                            <MentionDropdown
+                                query={mentionQuery}
+                                onSelect={handleMentionSelect}
+                                onClose={closeMentionDropdown}
+                                inputRef={inputRef}
+                            />
+                        )}
+
+                        {/* Context Chips */}
+                        {contextChips.length > 0 && (
+                            <div className="ai-context-chip-container">
+                                {contextChips.map(chip => (
+                                    <div key={chip.id} className="ai-context-chip">
+                                        {chip.icon}
+                                        <div className="ai-context-chip-content">
+                                            <span className="ai-context-chip-name">{chip.name}</span>
+                                            {chip.path && (
+                                                <span className="ai-context-chip-path">{chip.path}</span>
+                                            )}
+                                        </div>
+                                        <button
+                                            className="ai-context-chip-remove"
+                                            onClick={() => removeContextChip(chip.id)}
+                                            title="Remove"
+                                        >
+                                            <X size={12} />
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
                         {/* 1. Text Input */}
                         <textarea
                             ref={inputRef}
                             className="ai-input-unified"
                             value={input}
-                            onChange={(e) => {
-                                setInput(e.target.value)
-                                // Auto-resize
-                                e.target.style.height = 'auto'
-                                e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'
-                            }}
+                            onChange={handleInputChange}
                             onKeyDown={handleKeyDown}
-                            placeholder="Ask anything (⌘L), @ to mention, / for workflows"
+                            onPaste={handlePaste}
+                            placeholder="Ask anything, @ to mention"
                             rows={1}
                             disabled={isLoading}
                             style={{
@@ -965,15 +1339,8 @@ export default function AIPanel() {
                             }}
                         />
 
-                        {/* 2. Toolbar */}
-                        <div className="ai-input-toolbar" style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            padding: '2px 10px 6px',
-                            minHeight: '24px'
-                        }}>
-                            <div className="ai-toolbar-left" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <div className="ai-input-toolbar">
+                            <div className="ai-toolbar-left">
                                 <input
                                     type="file"
                                     ref={fileInputRef}
@@ -989,6 +1356,26 @@ export default function AIPanel() {
                                     style={{ padding: 4, color: 'var(--color-text-tertiary)', background: 'transparent', border: 'none', borderRadius: 4, cursor: 'pointer' }}
                                 >
                                     <Plus size={16} />
+                                </button>
+                                <div style={{ width: 1, height: 16, background: 'var(--color-divider)', margin: '0 4px' }} />
+                                {/* Web Search Toggle */}
+                                <button
+                                    onClick={() => setWebSearchEnabled(!webSearchEnabled)}
+                                    title={webSearchEnabled ? 'Web Search Enabled' : 'Enable Web Search'}
+                                    style={{
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        padding: 4,
+                                        borderRadius: 4,
+                                        border: 'none',
+                                        cursor: 'pointer',
+                                        background: webSearchEnabled ? 'var(--color-accent-alpha)' : 'transparent',
+                                        color: webSearchEnabled ? 'var(--color-accent)' : 'var(--color-text-tertiary)',
+                                        transition: 'all 0.2s'
+                                    }}
+                                >
+                                    <Globe size={16} />
                                 </button>
                                 <div style={{ width: 1, height: 16, background: 'var(--color-divider)', margin: '0 4px' }} />
                                 {/* Simple Model Selector Trigger (Dropdown logic can be added later or simple toggle) */}
@@ -1018,36 +1405,21 @@ export default function AIPanel() {
 
                             <div className="ai-toolbar-right">
                                 <button
-                                    className="ai-send-btn-unified"
-                                    onClick={handleSubmit}
-                                    disabled={(!input.trim() && pendingAttachments.length === 0) || isLoading}
-                                    style={{
-                                        width: 28,
-                                        height: 28,
-                                        borderRadius: '50%',
-                                        background: (!input.trim() && pendingAttachments.length === 0) ? 'var(--color-bg-tertiary)' : 'var(--color-accent)',
-                                        color: (!input.trim() && pendingAttachments.length === 0) ? 'var(--color-text-tertiary)' : 'white',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        justifyContent: 'center',
-                                        border: 'none',
-                                        cursor: (!input.trim() && pendingAttachments.length === 0) ? 'default' : 'pointer',
-                                        transition: 'all 0.2s'
-                                    }}
+                                    className={`ai-send-btn-unified ${isLoading ? 'loading' : ''}`}
+                                    onClick={isLoading ? stopGeneration : handleSubmit}
+                                    disabled={!isLoading && (!input.trim() && pendingAttachments.length === 0)}
                                 >
                                     {isLoading ? (
-                                        <div style={{ width: 12, height: 12, border: '2px solid white', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+                                        <Square size={12} fill="white" />
                                     ) : (
-                                        <Send size={14} /> // User mockup had ArrowRight, but Send is semantic. Let's stick with arrow if they want 1:1, but Send is standard. ArrowRight was in image.
+                                        <ArrowRight size={16} />
                                     )}
                                 </button>
                             </div>
                         </div>
                     </div>
 
-                    <div style={{ textAlign: 'center', fontSize: '10px', color: 'var(--color-text-tertiary)', marginTop: 8 }}>
-                        LLMs can make mistakes. Verify important info.
-                    </div>
+
                 </div>
             </div>
 
@@ -1057,8 +1429,24 @@ export default function AIPanel() {
             {showHistory && (
                 <SessionHistoryModal onClose={() => setShowHistory(false)} />
             )}
+            {showReviewModal && activeDocument && (
+                <ReviewChangesModal
+                    isOpen={showReviewModal}
+                    onClose={() => setShowReviewModal(false)}
+                    diffs={getDiffsForFile(activeDocument.filePath)}
+                    onAcceptDiff={(diffId) => {
+                        acceptDiff(activeDocument.filePath, diffId)
+                    }}
+                    onRejectDiff={(diffId) => {
+                        rejectDiff(activeDocument.filePath, diffId)
+                    }}
+                    onApplyAll={() => {
+                        applyAllDiffs(pendingActions)
+                        clearDiffsForFile(activeDocument.filePath)
+                    }}
+                />
+            )}
         </>
     )
 }
-
 

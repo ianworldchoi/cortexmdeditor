@@ -1,4 +1,5 @@
-import { X, Columns, Globe } from 'lucide-react'
+import { useEffect, useRef } from 'react'
+import { X, Columns, Globe, Eye, Edit3 } from 'lucide-react'
 import { useEditorStore } from '../../stores/editorStore'
 
 interface TabBarProps {
@@ -14,7 +15,8 @@ export default function TabBar({ groupId }: TabBarProps) {
         saveTab,
         splitEditorRight,
         closeGroup,
-        openBrowserTab
+        openBrowserTab,
+        toggleViewMode
     } = useEditorStore()
 
     const group = editorGroups.find(g => g.id === groupId)
@@ -22,6 +24,18 @@ export default function TabBar({ groupId }: TabBarProps) {
 
     const { tabs, activeTabId } = group
     const isActiveGroup = activeGroupId === groupId
+    const activeTab = tabs.find(t => t.id === activeTabId)
+    const tabListRef = useRef<HTMLDivElement>(null)
+
+    // 선택된 탭이 보이도록 스크롤
+    useEffect(() => {
+        if (activeTabId && tabListRef.current) {
+            const activeTabElement = tabListRef.current.querySelector(`[data-tab-id="${activeTabId}"]`) as HTMLElement
+            if (activeTabElement) {
+                activeTabElement.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' })
+            }
+        }
+    }, [activeTabId])
 
     const handleClose = (e: React.MouseEvent, tabId: string) => {
         e.stopPropagation()
@@ -48,10 +62,12 @@ export default function TabBar({ groupId }: TabBarProps) {
             style={{ opacity: isActiveGroup ? 1 : 0.8 }}
             onKeyDown={(e) => activeTabId && handleKeyDown(e, activeTabId)}
         >
-            <div className="tab-list">
+            <div className="tab-bar-bg" />
+            <div className="tab-list" ref={tabListRef}>
                 {tabs.map((tab) => (
                     <button
                         key={tab.id}
+                        data-tab-id={tab.id}
                         className={`tab ${tab.id === activeTabId ? 'active' : ''} ${tab.isDirty ? 'tab-dirty' : ''}`}
                         onClick={(e) => {
                             e.stopPropagation()
@@ -96,6 +112,17 @@ export default function TabBar({ groupId }: TabBarProps) {
                 >
                     <Globe size={14} />
                 </button>
+
+                {/* View/Edit Toggle Button */}
+                {activeTab && activeTab.type === 'document' && (
+                    <button
+                        className="tab-action-btn"
+                        onClick={() => toggleViewMode(activeTab.id)}
+                        title={activeTab.viewMode === 'preview' ? "Switch to Edit Mode (⌘⇧E)" : "Switch to View Mode (⌘⇧E)"}
+                    >
+                        {activeTab.viewMode === 'preview' ? <Edit3 size={14} /> : <Eye size={14} />}
+                    </button>
+                )}
             </div>
         </div>
     )

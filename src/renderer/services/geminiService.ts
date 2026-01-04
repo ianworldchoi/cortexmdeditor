@@ -4,19 +4,7 @@ import { useAIStore } from '../stores/aiStore'
 import { useVaultStore } from '../stores/vaultStore'
 import type { AIAttachment } from '../stores/aiStore'
 
-// Define the window.api type locally to satisfy the linter
-interface WindowAPI {
-    readFile: (path: string) => Promise<string>
-    createFile: (path: string, content: string) => Promise<void>
-    createFolder: (path: string) => Promise<void>
-    processYouTubeUrl: (apiKey: string, url: string) => Promise<{ strategy: string, url: string, fileUri?: string, mimeType?: string }>
-}
-
-declare global {
-    interface Window {
-        api: WindowAPI
-    }
-}
+// WindowAPI is defined globally in vite-env.d.ts
 
 // Helper to get all file paths from the tree
 function getAllFilePaths(nodes: FileNode[]): string[] {
@@ -121,20 +109,103 @@ ${recentMessages.map(m => `[${m.role.toUpperCase()}]: ${m.content}`).join('\n\n'
 `
 }
 
+export interface MentionedItem {
+    type: 'file' | 'directory'
+    path: string
+    name: string
+}
+
+// Build context from mentioned items (files and directories)
+async function buildMentionedContext(mentionedItems: MentionedItem[]): Promise<string> {
+    if (!mentionedItems || mentionedItems.length === 0) return ''
+
+    const contextParts: string[] = []
+
+    for (const item of mentionedItems) {
+        try {
+            if (item.type === 'file') {
+                const content = await window.api.readFile(item.path)
+                contextParts.push(`## Mentioned File: ${item.name}\n${content.slice(0, 5000)}`)
+            } else if (item.type === 'directory') {
+                // Read all .md files in the directory recursively
+                const { fileTree } = useVaultStore.getState()
+
+                // Find the folder node and get all .md files
+                const findFolder = (nodes: FileNode[], targetPath: string): FileNode | null => {
+                    for (const node of nodes) {
+                        if (node.path === targetPath) return node
+                        if (node.children) {
+                            const found = findFolder(node.children, targetPath)
+                            if (found) return found
+                        }
+                    }
+                    return null
+                }
+
+                const getMdFiles = (node: FileNode): string[] => {
+                    let paths: string[] = []
+                    if (!node.isDirectory && node.name.endsWith('.md')) {
+                        paths.push(node.path)
+                    } else if (node.children) {
+                        for (const child of node.children) {
+                            paths = [...paths, ...getMdFiles(child)]
+                        }
+                    }
+                    return paths
+                }
+
+                const folderNode = findFolder(fileTree, item.path)
+                if (folderNode && folderNode.children) {
+                    const mdFiles = getMdFiles(folderNode).slice(0, 10) // Limit to 10 files
+                    const folderContents: string[] = []
+
+                    for (const filePath of mdFiles) {
+                        try {
+                            const content = await window.api.readFile(filePath)
+                            const fileName = filePath.split('/').pop() || 'Unknown'
+                            folderContents.push(`### ${fileName}\n${content.slice(0, 2000)}`)
+                        } catch (e) {
+                            console.warn(`Failed to read ${filePath}`, e)
+                        }
+                    }
+
+                    if (folderContents.length > 0) {
+                        contextParts.push(`## Mentioned Folder: ${item.name} (${folderContents.length} files)\n${folderContents.join('\n\n---\n\n')}`)
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn(`Failed to read mentioned item ${item.path}`, e)
+        }
+    }
+
+    if (contextParts.length === 0) return ''
+    return `## Mentioned Context (User explicitly referenced these)\n\n${contextParts.join('\n\n---\n\n')}`
+}
+
 export async function sendMessage(
     userMessage: string,
     activeDocument: Document | null,
-    attachments: AIAttachment[] = []
+    attachments: AIAttachment[] = [],
+    mentionedItems: MentionedItem[] = [],
+    signal?: AbortSignal
 ): Promise<string> {
     const vaultPath = useVaultStore.getState().vaultPath
-    const { apiKey, customSystemPrompt, vaultSystemPrompts, selectedModel } = useAIStore.getState()
+    const { apiKey, customSystemPrompt, vaultSystemPrompts, selectedModel, webSearchEnabled } = useAIStore.getState()
 
     if (!apiKey) {
         throw new Error('API key not set. Please configure your Gemini API key in settings.')
     }
 
+    if (signal?.aborted) {
+        throw new DOMException('Aborted', 'AbortError')
+    }
+
     // Initialize the new Client from google-genai SDK
     const client = new GoogleGenAI({ apiKey: apiKey })
+
+    // Configure tools based on settings
+    const tools: any[] = webSearchEnabled ? [{ googleSearch: {} }] : []
 
     // Determine effective system prompt
     let effectiveSystemPrompt = customSystemPrompt
@@ -146,9 +217,18 @@ export async function sendMessage(
     const activeDocContext = buildActiveDocumentContext(activeDocument)
     const chatHistory = buildChatHistory()
     const vaultContext = await getSmartContext(userMessage)
+    const mentionedContext = await buildMentionedContext(mentionedItems)
+
+    if (signal?.aborted) {
+        throw new DOMException('Aborted', 'AbortError')
+    }
 
     const contextPart = `
 ${effectiveSystemPrompt}
+
+---
+
+${mentionedContext}
 
 ---
 
@@ -229,6 +309,10 @@ ${chatHistory}
     }
     console.log('[GeminiService] Constructing request with parts count:', parts.length)
 
+    if (signal?.aborted) {
+        throw new DOMException('Aborted', 'AbortError')
+    }
+
     try {
         // Use the new Client API
         // @ts-ignore - The types for google-genai might be strict, but this pattern matches the documentation
@@ -239,8 +323,13 @@ ${chatHistory}
                     role: 'user',
                     parts: parts
                 }
-            ]
+            ],
+            config: tools.length > 0 ? { tools } : undefined
         })
+
+        if (signal?.aborted) {
+            throw new DOMException('Aborted', 'AbortError')
+        }
 
         // Handle response
         // The new SDK response object typically has a .text property (getter), while older/web versions had .text()
@@ -253,6 +342,9 @@ ${chatHistory}
             || respAny.candidates?.[0]?.content?.parts?.[0]?.text
             || ''
     } catch (error) {
+        if (signal?.aborted || (error instanceof Error && error.name === 'AbortError')) {
+            throw new DOMException('Aborted', 'AbortError')
+        }
         console.error('Gemini API error:', error)
         throw error
     }

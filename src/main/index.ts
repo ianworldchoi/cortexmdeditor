@@ -10,7 +10,8 @@ import {
     createFolder,
     moveFile,
     renameFile,
-    pathExists
+    pathExists,
+    copyImageToVault
 } from './services/fileService'
 import { pathToFileURL } from 'url'
 
@@ -94,6 +95,17 @@ function setupIpcHandlers(): void {
         return result.filePaths[0]
     })
 
+    // Open PDF file dialog
+    ipcMain.handle('dialog:open-pdf', async () => {
+        const result = await dialog.showOpenDialog({
+            properties: ['openFile']
+        })
+        if (result.canceled) return null
+        return result.filePaths[0]
+    })
+
+
+
     // Read vault file tree
     ipcMain.handle('vault:read-tree', async (_, vaultPath: string) => {
         return readFileTree(vaultPath)
@@ -148,6 +160,11 @@ function setupIpcHandlers(): void {
             console.error('Error in ai:process-youtube-url:', e)
             throw e
         }
+    })
+
+    // Copy image to vault
+    ipcMain.handle('image:copy-to-vault', async (_, sourcePath: string, vaultPath: string) => {
+        return copyImageToVault(sourcePath, vaultPath)
     })
 }
 

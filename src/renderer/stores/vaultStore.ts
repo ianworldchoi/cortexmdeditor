@@ -17,11 +17,16 @@ interface VaultState {
     openVault: () => Promise<void>
     refreshTree: () => Promise<void>
     indexDocuments: () => Promise<void>  // 문서 인덱싱
-    createNewFile: (parentPath: string, fileName: string) => Promise<string | null>
+    createNewFile: (parentPath: string, fileName: string, initialContent?: string, tags?: string[]) => Promise<string | null>
     createNewFolder: (parentPath: string, folderName: string) => Promise<boolean>
     moveItem: (sourcePath: string, destFolderPath: string) => Promise<boolean>
     renameItem: (path: string, newName: string) => Promise<boolean>
     deleteItem: (itemPath: string) => Promise<boolean>
+    createUntitledNote: (parentPath: string) => Promise<string | null>
+
+    // UI State
+    isSidebarCollapsed: boolean
+    toggleSidebar: () => void
 }
 
 // 문서 인덱스 엔트리
@@ -33,16 +38,16 @@ interface DocumentIndexEntry {
 }
 
 // Generate default frontmatter for new files
-function generateDefaultContent(title: string): string {
+function generateDefaultContent(title: string, tags: string[] = []): string {
     const now = new Date().toISOString()
+    const tagsString = tags.length > 0 ? `[${tags.map(t => `'${t}'`).join(', ')}]` : '[]'
     return `---
 id: ${crypto.randomUUID()}
 title: ${title}
-tags: []
+tags: ${tagsString}
 created_at: ${now}
 updated_at: ${now}
 ---
-
 # ${title}
 
 `
@@ -56,6 +61,7 @@ export const useVaultStore = create<VaultState>()(
             isLoading: false,
             error: null,
             documentIndex: [],
+            isSidebarCollapsed: false,
 
             setVaultPath: (path) => set({ vaultPath: path }),
             setFileTree: (tree) => set({ fileTree: tree }),
@@ -150,7 +156,7 @@ export const useVaultStore = create<VaultState>()(
             },
 
 
-            createNewFile: async (parentPath: string, fileName: string) => {
+            createNewFile: async (parentPath: string, fileName: string, initialContent?: string, tags: string[] = []) => {
                 try {
                     const fullFileName = fileName.endsWith('.md') ? fileName : `${fileName}.md`
                     const filePath = `${parentPath}/${fullFileName}`
@@ -163,7 +169,12 @@ export const useVaultStore = create<VaultState>()(
                     }
 
                     const title = fileName.replace('.md', '')
-                    const content = generateDefaultContent(title)
+                    let content = generateDefaultContent(title, tags)
+
+                    if (initialContent) {
+                        content += initialContent
+                    }
+
                     await window.api.createFile(filePath, content)
 
                     // Refresh tree
@@ -172,6 +183,37 @@ export const useVaultStore = create<VaultState>()(
                 } catch (error) {
                     set({
                         error: error instanceof Error ? error.message : 'Failed to create file'
+                    })
+                    return null
+                }
+            },
+
+            createUntitledNote: async (parentPath: string) => {
+                try {
+                    let counter = 0
+                    let fileName = 'Untitled.md'
+                    let title = 'Untitled'
+
+                    // Find unique filename
+                    while (true) {
+                        const filePath = `${parentPath}/${fileName}`
+                        const exists = await window.api.pathExists(filePath)
+                        if (!exists) break
+
+                        counter++
+                        title = `Untitled ${counter}`
+                        fileName = `Untitled ${counter}.md`
+                    }
+
+                    const filePath = `${parentPath}/${fileName}`
+                    const content = generateDefaultContent(title)
+                    await window.api.createFile(filePath, content)
+
+                    await get().refreshTree()
+                    return filePath
+                } catch (error) {
+                    set({
+                        error: error instanceof Error ? error.message : 'Failed to create note'
                     })
                     return null
                 }
@@ -264,11 +306,17 @@ export const useVaultStore = create<VaultState>()(
                     })
                     return false
                 }
-            }
+            },
+
+            // UI Actions
+            toggleSidebar: () => set((state) => ({ isSidebarCollapsed: !state.isSidebarCollapsed }))
         }),
         {
             name: 'cortex-vault',
-            partialize: (state) => ({ vaultPath: state.vaultPath })
+            partialize: (state) => ({
+                vaultPath: state.vaultPath,
+                isSidebarCollapsed: state.isSidebarCollapsed
+            })
         }
     )
 )

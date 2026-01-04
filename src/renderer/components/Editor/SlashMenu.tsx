@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useLayoutEffect } from 'react'
 import {
     Type,
     Heading1,
@@ -12,7 +12,9 @@ import {
     Minus,
     Lightbulb,
     Image as ImageIcon,
-    ChevronRight
+    ChevronRight,
+    Table2,
+    FileText
 } from 'lucide-react'
 import type { BlockType } from '@shared/types'
 
@@ -42,7 +44,9 @@ const MENU_ITEMS: MenuItem[] = [
     { type: 'code', label: 'Code', icon: <Code size={16} />, shortcut: '```' },
     { type: 'divider', label: 'Divider', icon: <Minus size={16} />, shortcut: '---' },
     { type: 'callout', label: 'Callout', icon: <Lightbulb size={16} />, shortcut: '' },
-    { type: 'image', label: 'Image', icon: <ImageIcon size={16} />, shortcut: '' }
+    { type: 'image', label: 'Image', icon: <ImageIcon size={16} />, shortcut: '' },
+    { type: 'file', label: 'File', icon: <FileText size={16} />, shortcut: '' },
+    { type: 'table', label: 'Table', icon: <Table2 size={16} />, shortcut: '' }
 ]
 
 export default function SlashMenu({
@@ -53,10 +57,38 @@ export default function SlashMenu({
     const [selectedIndex, setSelectedIndex] = useState(0)
     const [filter, setFilter] = useState('')
     const menuRef = useRef<HTMLDivElement>(null)
+    const [adjustedPos, setAdjustedPos] = useState(position)
 
     const filteredItems = MENU_ITEMS.filter((item) =>
         item.label.toLowerCase().includes(filter.toLowerCase())
     )
+
+    // Adjust position if menu would overflow viewport
+    // Adjust position if menu would overflow viewport
+    useLayoutEffect(() => {
+        if (menuRef.current) {
+            const rect = menuRef.current.getBoundingClientRect()
+            const viewportHeight = window.innerHeight
+            const viewportWidth = window.innerWidth
+
+            let newX = position.x
+            let newY = position.y
+
+            // Check bottom overflow - open menu upward if near bottom
+            if (position.y + rect.height > viewportHeight - 10) {
+                newY = position.y - rect.height
+                if (newY < 10) newY = 10
+            }
+
+            // Check right overflow
+            if (position.x + rect.width > viewportWidth - 10) {
+                newX = position.x - rect.width
+                if (newX < 10) newX = 10
+            }
+
+            setAdjustedPos({ x: newX, y: newY })
+        }
+    }, [position])
 
     // Handle keyboard navigation
     useEffect(() => {
@@ -118,8 +150,8 @@ export default function SlashMenu({
             className="slash-menu"
             style={{
                 position: 'fixed',
-                left: position.x,
-                top: position.y
+                left: adjustedPos.x,
+                top: adjustedPos.y
             }}
         >
             {filteredItems.length === 0 ? (
@@ -151,3 +183,4 @@ export default function SlashMenu({
         </div>
     )
 }
+

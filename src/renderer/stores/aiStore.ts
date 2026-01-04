@@ -38,6 +38,7 @@ interface AIState {
     customSystemPrompt: string
     vaultSystemPrompts: Record<string, string>
     selectedModel: AIModel
+    webSearchEnabled: boolean
 
     // Actions
     togglePanel: () => void
@@ -63,6 +64,7 @@ interface AIState {
     setVaultSystemPrompt: (vaultPath: string, prompt: string | null) => void
     resetSystemPrompt: () => void
     setSelectedModel: (model: AIModel) => void
+    setWebSearchEnabled: (enabled: boolean) => void
 }
 
 const DEFAULT_SYSTEM_PROMPT = `You are an AI assistant integrated into Cortex, a local-first Markdown note-taking app.
@@ -73,13 +75,13 @@ You have REAL power to interact with the user's vault:
 ✅ **Create new files** - You CAN create new markdown files anywhere in the vault
 ✅ **Create new folders** - You CAN create new folders to organize content  
 ✅ **Edit documents** - You CAN modify blocks in the active document
-✅ **Edit documents** - You CAN modify blocks in the active document
+✅ **Update ANY file** - You CAN modify any file in the vault by path (even if not open!)
 ✅ **Delete content** - You CAN remove blocks from the active document
 ✅ **Analyze YouTube Videos** - You CAN directly watch and analyze YouTube videos if a URL is provided.
 
 
-⚠️ **CRITICAL**: Creating files/folders works even if NO document is currently open!
-When the user asks to create a new note or folder, USE YOUR POWER - don't tell them to do it manually.
+⚠️ **CRITICAL**: Creating/updating files works even if that file is NOT currently open!
+When the user asks to modify specific files (mentioned with @), USE YOUR POWER - don't tell them to open the file first.
 
 ---
 
@@ -103,6 +105,10 @@ Before responding, classify the user's intent:
    - Examples: "새 노트 만들어줘", "Create a note called X", "폴더 하나 만들어"
    - Response: Use batch-action with 'create_file' or 'create_folder'. (Works WITHOUT active document!)
 
+5. **Batch File Update**: Wants to modify specific files (often mentioned with @).
+   - Examples: "이 파일들 수정해줘", "Update all mentioned files", "@files: or @directory: mentioned content"
+   - Response: Use batch-action with 'update_file' for each file. (Works on ANY file by path!)
+
 **Default**: If unsure, treat as Question/Discussion.
 
 ---
@@ -120,6 +126,7 @@ Output a JSON **Array** wrapped in \`\`\`json:batch-action\`\`\` code block.
 | update_meta | Update document metadata | ✅ Yes |
 | create_file | Create new file | ❌ No |
 | create_folder | Create new folder | ❌ No |
+| update_file | Modify existing file by path | ❌ No |
 
 ### Schema
 \`\`\`typescript
@@ -130,15 +137,21 @@ type AIAction =
   | { type: 'update_meta', metaField: 'title' | 'tags' | 'alwaysOn', metaValue: string | string[] | boolean }
   | { type: 'create_file', path: string, content: string }
   | { type: 'create_folder', path: string }
+  | { type: 'update_file', path: string, content: string }
 \`\`\`
 
-### Example: Creating a File (No Document Needed!)
+### Example: Updating Multiple Files (No Document Needed!)
 \`\`\`json:batch-action
 [
   {
-    "type": "create_file",
-    "path": "아티클 정리/새 아티클.md",
-    "content": "---\\nid: abc123\\ntitle: 새 아티클\\ntags: []\\ncreated_at: 2024-01-01\\nupdated_at: 2024-01-01\\n---\\n\\n# 제목\\n\\n내용을 여기에 작성하세요."
+    "type": "update_file",
+    "path": "Daily/2024-01-01.md",
+    "content": "---\\nid: abc123\\ntitle: Updated Note\\ntags: [daily]\\ncreated_at: 2024-01-01\\nupdated_at: 2024-01-01\\n---\\n\\n# Updated Content\\n\\nNew content here."
+  },
+  {
+    "type": "update_file",
+    "path": "Daily/2024-01-02.md",
+    "content": "---\\nid: def456\\ntitle: Another Note\\ntags: [daily]\\n---\\n\\n# Another Updated Note"
   }
 ]
 \`\`\`
@@ -148,7 +161,8 @@ type AIAction =
 2. Use **\`\`\`json:batch-action\`\`\`** as code block language.
 3. For edits, use **[Block ID: ...]** from the context.
 4. For file paths, use relative paths from vault root.
-5. **DO NOT tell users "I can't create files" - YOU CAN!**`
+5. **DO NOT tell users "I can't modify files" - YOU CAN with update_file!**
+6. When user mentions files/folders with @, you have their full content in context.`
 
 
 export const useAIStore = create<AIState>()(
@@ -163,6 +177,7 @@ export const useAIStore = create<AIState>()(
             customSystemPrompt: DEFAULT_SYSTEM_PROMPT,
             vaultSystemPrompts: {},
             selectedModel: 'gemini-3-pro-preview',
+            webSearchEnabled: false,
 
             togglePanel: () => set((state) => ({ isPanelOpen: !state.isPanelOpen })),
             openPanel: () => set({ isPanelOpen: true }),
@@ -310,7 +325,8 @@ export const useAIStore = create<AIState>()(
 
             resetSystemPrompt: () => set({ customSystemPrompt: DEFAULT_SYSTEM_PROMPT }),
 
-            setSelectedModel: (model) => set({ selectedModel: model })
+            setSelectedModel: (model) => set({ selectedModel: model }),
+            setWebSearchEnabled: (enabled) => set({ webSearchEnabled: enabled })
         }),
         {
             name: 'cortex-ai',
@@ -322,7 +338,8 @@ export const useAIStore = create<AIState>()(
                 selectedModel: state.selectedModel,
                 sessions: state.sessions,
                 activeSessionId: state.activeSessionId,
-                vaultSystemPrompts: state.vaultSystemPrompts
+                vaultSystemPrompts: state.vaultSystemPrompts,
+                webSearchEnabled: state.webSearchEnabled
             }),
             version: 5, // Bump version
             migrate: (persistedState: any, version: number) => {

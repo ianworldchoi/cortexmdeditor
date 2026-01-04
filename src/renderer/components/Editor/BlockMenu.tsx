@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useLayoutEffect } from 'react'
 import {
     Trash2,
     ArrowUpToLine,
@@ -35,6 +35,33 @@ export default function BlockMenu({
 }: BlockMenuProps) {
     const [selectedIndex, setSelectedIndex] = useState(0)
     const menuRef = useRef<HTMLDivElement>(null)
+    const [adjustedPos, setAdjustedPos] = useState(position)
+
+    // Adjust position if menu would overflow viewport
+    useLayoutEffect(() => {
+        if (menuRef.current) {
+            const rect = menuRef.current.getBoundingClientRect()
+            const viewportHeight = window.innerHeight
+            const viewportWidth = window.innerWidth
+
+            let newX = position.x
+            let newY = position.y
+
+            // Check bottom overflow - open menu upward if near bottom
+            if (position.y + rect.height > viewportHeight - 10) {
+                newY = position.y - rect.height
+                if (newY < 10) newY = 10
+            }
+
+            // Check right overflow
+            if (position.x + rect.width > viewportWidth - 10) {
+                newX = position.x - rect.width
+                if (newX < 10) newX = 10
+            }
+
+            setAdjustedPos({ x: newX, y: newY })
+        }
+    }, [position])
 
     // Handle keyboard navigation
     useEffect(() => {
@@ -85,8 +112,8 @@ export default function BlockMenu({
             className="slash-menu" // Re-using slash menu styles for consistency
             style={{
                 position: 'fixed',
-                left: position.x,
-                top: position.y,
+                left: adjustedPos.x,
+                top: adjustedPos.y,
                 minWidth: '180px'
             }}
         >
@@ -114,3 +141,4 @@ export default function BlockMenu({
         </div>
     )
 }
+
