@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
-import { FileText, Folder, Search, ChevronRight } from 'lucide-react'
+import { FileText, Folder, ChevronRight } from 'lucide-react'
 import { FixedSizeList as List } from 'react-window'
 import { useVaultStore } from '../../stores/vaultStore'
 import type { FileNode } from '@shared/types'
@@ -13,6 +13,7 @@ export interface MentionedItem {
 interface MentionDropdownProps {
     query: string
     onSelect: (item: MentionedItem) => void
+    onMenuSelect: (menuId: 'files' | 'directory') => void
     onClose: () => void
     inputRef: React.RefObject<HTMLTextAreaElement | null>
 }
@@ -22,7 +23,7 @@ type MenuState = 'menu' | 'files' | 'directory'
 const ITEM_HEIGHT = 32
 const MAX_VISIBLE_ITEMS = 10
 
-export default function MentionDropdown({ query, onSelect, onClose, inputRef }: MentionDropdownProps) {
+export default function MentionDropdown({ query, onSelect, onMenuSelect, onClose, inputRef }: MentionDropdownProps) {
     const { documentIndex, fileTree, vaultPath } = useVaultStore()
     const [menuState, setMenuState] = useState<MenuState>('menu')
     const [selectedIndex, setSelectedIndex] = useState(0)
@@ -146,8 +147,10 @@ export default function MentionDropdown({ query, onSelect, onClose, inputRef }: 
             const item = results[index] as { id: string; label: string }
             if (item?.id === 'files') {
                 setMenuState('files')
+                onMenuSelect('files')
             } else if (item?.id === 'directory') {
                 setMenuState('directory')
+                onMenuSelect('directory')
             }
         } else {
             const item = results[index] as MentionedItem
@@ -160,8 +163,10 @@ export default function MentionDropdown({ query, onSelect, onClose, inputRef }: 
     const handleMenuClick = (id: string) => {
         if (id === 'files') {
             setMenuState('files')
+            onMenuSelect('files')
         } else if (id === 'directory') {
             setMenuState('directory')
+            onMenuSelect('directory')
         }
     }
 
@@ -222,11 +227,6 @@ export default function MentionDropdown({ query, onSelect, onClose, inputRef }: 
 
             {menuState === 'files' && (
                 <div className="mention-results">
-                    <div className="mention-header">
-                        <Search size={12} />
-                        <span>Search files: {searchTerm || '...'}</span>
-                        <span className="mention-count">{results.length} files</span>
-                    </div>
                     {results.length === 0 ? (
                         <div className="mention-empty">No files found</div>
                     ) : (
@@ -246,11 +246,6 @@ export default function MentionDropdown({ query, onSelect, onClose, inputRef }: 
 
             {menuState === 'directory' && (
                 <div className="mention-results">
-                    <div className="mention-header">
-                        <Folder size={12} />
-                        <span>Select folder: {searchTerm || '...'}</span>
-                        <span className="mention-count">{results.length} folders</span>
-                    </div>
                     {results.length === 0 ? (
                         <div className="mention-empty">No folders found</div>
                     ) : (

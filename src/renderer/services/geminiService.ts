@@ -188,10 +188,11 @@ export async function sendMessage(
     activeDocument: Document | null,
     attachments: AIAttachment[] = [],
     mentionedItems: MentionedItem[] = [],
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onChunk?: (text: string) => void
 ): Promise<string> {
     const vaultPath = useVaultStore.getState().vaultPath
-    const { apiKey, customSystemPrompt, vaultSystemPrompts, selectedModel, webSearchEnabled } = useAIStore.getState()
+    const { apiKey, customSystemPrompt, vaultSystemPrompts, selectedModel, webSearchEnabled, getFolderPromptForPath } = useAIStore.getState()
 
     if (!apiKey) {
         throw new Error('API key not set. Please configure your Gemini API key in settings.')
@@ -219,6 +220,11 @@ export async function sendMessage(
     const vaultContext = await getSmartContext(userMessage)
     const mentionedContext = await buildMentionedContext(mentionedItems)
 
+    // Get folder-specific prompt if available
+    const folderPrompt = activeDocument?.filePath
+        ? getFolderPromptForPath(activeDocument.filePath)
+        : null
+
     if (signal?.aborted) {
         throw new DOMException('Aborted', 'AbortError')
     }
@@ -228,7 +234,7 @@ ${effectiveSystemPrompt}
 
 ---
 
-${mentionedContext}
+${folderPrompt ? `## Folder Context (Auto-applied from folder settings)\n\n${folderPrompt}\n\n---\n\n` : ''}${mentionedContext}
 
 ---
 
@@ -314,9 +320,9 @@ ${chatHistory}
     }
 
     try {
-        // Use the new Client API
+        // Use streaming API for real-time response
         // @ts-ignore - The types for google-genai might be strict, but this pattern matches the documentation
-        const response = await client.models.generateContent({
+        const stream = await client.models.generateContentStream({
             model: selectedModel,
             contents: [
                 {
@@ -327,20 +333,36 @@ ${chatHistory}
             config: tools.length > 0 ? { tools } : undefined
         })
 
-        if (signal?.aborted) {
-            throw new DOMException('Aborted', 'AbortError')
+        let fullResponse = ''
+
+        // Process the stream
+        for await (const chunk of stream) {
+            if (signal?.aborted) {
+                throw new DOMException('Aborted', 'AbortError')
+            }
+
+            // Extract text from chunk
+            const chunkAny = chunk as any
+            let chunkText = ''
+
+            if (typeof chunkAny.text === 'function') {
+                chunkText = chunkAny.text()
+            } else if (typeof chunkAny.text === 'string') {
+                chunkText = chunkAny.text
+            } else if (chunkAny.candidates?.[0]?.content?.parts?.[0]?.text) {
+                chunkText = chunkAny.candidates[0].content.parts[0].text
+            }
+
+            if (chunkText) {
+                fullResponse += chunkText
+                // Call the streaming callback if provided
+                if (onChunk) {
+                    onChunk(fullResponse)
+                }
+            }
         }
 
-        // Handle response
-        // The new SDK response object typically has a .text property (getter), while older/web versions had .text()
-        const respAny = response as any
-        if (typeof respAny.text === 'function') {
-            return respAny.text()
-        }
-        // If it's a property (string) or we need to dig into candidates
-        return (typeof respAny.text === 'string' ? respAny.text : undefined)
-            || respAny.candidates?.[0]?.content?.parts?.[0]?.text
-            || ''
+        return fullResponse
     } catch (error) {
         if (signal?.aborted || (error instanceof Error && error.name === 'AbortError')) {
             throw new DOMException('Aborted', 'AbortError')

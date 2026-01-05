@@ -13,7 +13,10 @@ import TableBlock, { createDefaultTableData } from './TableBlock'
 import BacklinkSection from './BacklinkSection'
 import HighlightModal from './HighlightModal'
 import HighlightTooltip from './HighlightTooltip'
+import TextSelectionTooltip from './TextSelectionTooltip'
 import FileBlock from './FileBlock'
+import { useBlockHistory } from '../../hooks/useBlockHistory'
+import { useAIStore, type SelectedTextContext } from '../../stores/aiStore'
 
 
 
@@ -455,7 +458,12 @@ function BlockComponent({
         }
         if (block.type === 'todo') return (
             <div className="preview-todo" style={previewStyle}>
-                <input type="checkbox" checked={block.checked} readOnly />
+                <div
+                    className={`block-checkbox ${block.checked ? 'checked' : ''}`}
+                    onClick={() => onTodoToggle(!block.checked)}
+                >
+                    {block.checked && <Check size={12} strokeWidth={3} />}
+                </div>
                 <span className={block.checked ? 'checked' : ''}>{contentElement}</span>
             </div>
         )
@@ -1078,8 +1086,8 @@ function BlockComponent({
 }
 
 export default function BlockEditor({ document, tabId, viewMode }: BlockEditorProps) {
-    const { updateDocument, updateDocumentMeta, saveTab, openTab } = useEditorStore()
-    const { documentIndex, vaultPath, createNewFile } = useVaultStore() // Added useVaultStore
+    const { updateDocument, updateDocumentMeta, saveTab, openTab, renameFile } = useEditorStore()
+    const { documentIndex, vaultPath, createNewFile, renameItem } = useVaultStore() // Added renameItem
     const { getDiffsForFile, getDiffForBlock, acceptDiff, rejectDiff } = useDiffStore()
     const [blocks, setBlocks] = useState<Block[]>(document.blocks)
     const [focusedBlockId, setFocusedBlockId] = useState<string | null>(null)
@@ -1088,6 +1096,10 @@ export default function BlockEditor({ document, tabId, viewMode }: BlockEditorPr
     const [backlinkMenu, setBacklinkMenu] = useState<{ position: { x: number, y: number }, query: string, blockId: string } | null>(null)
     const [selectedBlockIds, setSelectedBlockIds] = useState<Set<string>>(new Set())
     const [blockMenu, setBlockMenu] = useState<{ id: string, position: { x: number, y: number } } | null>(null)
+
+    // State for editable filename in header
+    const currentFileName = document.filePath?.split('/').pop()?.replace(/\.md$/, '') || 'Untitled'
+    const [headerTitle, setHeaderTitle] = useState(currentFileName)
     const blockRefs = useRef<Map<string, HTMLTextAreaElement>>(new Map())
     const isLocalUpdate = useRef(false)
     const editorRef = useRef<HTMLDivElement>(null)
@@ -1101,10 +1113,21 @@ export default function BlockEditor({ document, tabId, viewMode }: BlockEditorPr
     const [dropPosition, setDropPosition] = useState<'above' | 'below' | null>(null)
     const lastSelectRef = useRef<string | null>(null)
 
+    // Block-level undo/redo history
+    const { pushState, undo, redo, canUndo, canRedo, pushToRedo } = useBlockHistory() as ReturnType<typeof useBlockHistory> & { pushToRedo: (blocks: Block[]) => void }
+
     // Drag selection box state
     const [isSelecting, setIsSelecting] = useState(false)
     const [selectionStart, setSelectionStart] = useState<{ x: number, y: number } | null>(null)
     const [selectionEnd, setSelectionEnd] = useState<{ x: number, y: number } | null>(null)
+
+    // Text selection tooltip state for "Chat" action
+    const [textSelectionTooltip, setTextSelectionTooltip] = useState<{
+        text: string
+        position: { x: number, y: number }
+        blockId: string
+    } | null>(null)
+    const { setSelectedTextContext, openPanel: openAIPanel } = useAIStore()
 
     // Highlight state
     const {
@@ -1135,6 +1158,16 @@ export default function BlockEditor({ document, tabId, viewMode }: BlockEditorPr
         }
         isLocalUpdate.current = false
     }, [blocks, tabId, updateDocument])
+
+    // Debounced autosave - save after 1.5 seconds of inactivity
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            // Check if document is dirty before saving
+            saveTab(tabId)
+        }, 1500)
+
+        return () => clearTimeout(timer)
+    }, [blocks, tabId, saveTab])
 
     // Sync blocks from store (e.g. AI updates)
     useEffect(() => {
@@ -1240,13 +1273,15 @@ export default function BlockEditor({ document, tabId, viewMode }: BlockEditorPr
     }, [])
 
     const deleteBlock = useCallback((blockId: string) => {
+        // Save current state for undo before deleting
+        pushState(blocks)
         isLocalUpdate.current = true
         setBlocks(prev => {
             const newBlocks = deleteBlockFromTree(prev, blockId)
             if (newBlocks.length === 0) return [createNewBlock('')]
             return newBlocks
         })
-    }, [deleteBlockFromTree, createNewBlock])
+    }, [deleteBlockFromTree, createNewBlock, pushState, blocks])
 
     const handleBlockMenuSelect = useCallback((action: BlockAction) => {
         if (!blockMenu) return
@@ -1348,6 +1383,8 @@ export default function BlockEditor({ document, tabId, viewMode }: BlockEditorPr
             ? [...selectedBlockIds]
             : [draggedBlockId]
 
+        // Save current state for undo before moving
+        pushState(blocks)
         isLocalUpdate.current = true
         setBlocks(prev => {
             // Remove blocks to move
@@ -1369,7 +1406,7 @@ export default function BlockEditor({ document, tabId, viewMode }: BlockEditorPr
 
         handleDragEnd()
         setSelectedBlockIds(new Set())
-    }, [draggedBlockId, dropPosition, selectedBlockIds, handleDragEnd])
+    }, [draggedBlockId, dropPosition, selectedBlockIds, handleDragEnd, pushState, blocks])
 
     // Multi-select with Shift-click
     const handleBlockSelect = useCallback((blockId: string, shiftKey: boolean) => {
@@ -1504,6 +1541,8 @@ export default function BlockEditor({ document, tabId, viewMode }: BlockEditorPr
                 if (!(activeEl instanceof HTMLTextAreaElement) ||
                     (activeEl.selectionStart === 0 && activeEl.selectionEnd === 0 && activeEl.value === '')) {
                     e.preventDefault()
+                    // Save current state for undo before deleting
+                    pushState(blocks)
                     isLocalUpdate.current = true
                     setBlocks(prev => {
                         const rem = prev.filter(b => !selectedBlockIds.has(b.block_id))
@@ -1511,6 +1550,42 @@ export default function BlockEditor({ document, tabId, viewMode }: BlockEditorPr
                         return rem
                     })
                     setSelectedBlockIds(new Set())
+                }
+            }
+
+            // Cmd/Ctrl + Z: Block-level undo
+            // Only when not actively editing text in a textarea
+            if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === 'z') {
+                const activeEl = window.document.activeElement
+                // Block-level undo only when:
+                // 1. Not in a textarea, OR
+                // 2. In a textarea but it's empty (no text to undo)
+                const shouldBlockUndo = !(activeEl instanceof HTMLTextAreaElement) ||
+                    activeEl.value === ''
+
+                if (shouldBlockUndo && canUndo()) {
+                    e.preventDefault()
+                    const prevState = undo()
+                    if (prevState) {
+                        // Push current state to redo stack before restoring
+                        pushToRedo(blocks)
+                        isLocalUpdate.current = true
+                        setBlocks(prevState)
+                    }
+                }
+            }
+
+            // Cmd/Ctrl + Shift + Z: Block-level redo
+            if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'z') {
+                e.preventDefault()
+                if (canRedo()) {
+                    const nextState = redo()
+                    if (nextState) {
+                        // Push current state to undo stack before redoing
+                        pushState(blocks)
+                        isLocalUpdate.current = true
+                        setBlocks(nextState)
+                    }
                 }
             }
 
@@ -1573,11 +1648,160 @@ export default function BlockEditor({ document, tabId, viewMode }: BlockEditorPr
                     }
                 }
             }
+
+            // Cmd/Ctrl + L: Send selection to AI Chat
+            if ((e.metaKey || e.ctrlKey) && e.key === 'l') {
+                const selection = window.getSelection()
+                if (selection && !selection.isCollapsed && selection.toString().trim()) {
+                    e.preventDefault()
+                    const selectedText = selection.toString()
+
+                    // Set context and open AI panel
+                    setSelectedTextContext({
+                        text: selectedText,
+                        blockId: focusedBlockId || '',
+                        filePath: document.filePath
+                    })
+                    openAIPanel()
+                    setTextSelectionTooltip(null)
+                }
+            }
         }
 
         window.addEventListener('keydown', handleKeyDown)
         return () => window.removeEventListener('keydown', handleKeyDown)
-    }, [tabId, saveTab, blocks, selectedBlockIds, focusedBlockId, blockMenu, createNewBlock, openHighlightCreateModal])
+    }, [tabId, saveTab, blocks, selectedBlockIds, focusedBlockId, blockMenu, createNewBlock, openHighlightCreateModal, pushState, undo, redo, canUndo, canRedo, pushToRedo, setSelectedTextContext, openAIPanel, document.filePath])
+
+    // Text selection detection for "Chat" tooltip
+    useEffect(() => {
+        const handleMouseUp = (e: MouseEvent) => {
+            // Small delay to ensure selection is finalized
+            setTimeout(() => {
+                const activeEl = window.document.activeElement
+
+                // Check if we're in a textarea (edit mode)
+                if (activeEl instanceof HTMLTextAreaElement) {
+                    const { selectionStart, selectionEnd, value } = activeEl
+                    const selectedText = value.slice(selectionStart, selectionEnd)
+
+                    if (!selectedText.trim()) {
+                        setTextSelectionTooltip(null)
+                        return
+                    }
+
+                    // Get cursor position for textarea
+                    const rect = activeEl.getBoundingClientRect()
+
+                    // Calculate approximate position based on textarea and selection
+                    // We'll position it at the bottom of the textarea area
+                    const gap = 8
+                    let x = rect.left + rect.width / 2
+                    let y = rect.bottom - 20 // Approximate position near selection
+
+                    // Try to get more precise position using caret coordinates
+                    // Create temporary element to measure position
+                    const mirror = window.document.createElement('div')
+                    const computed = window.getComputedStyle(activeEl)
+                    mirror.style.cssText = `
+                        position: absolute;
+                        visibility: hidden;
+                        white-space: pre-wrap;
+                        word-wrap: break-word;
+                        padding: ${computed.padding};
+                        font: ${computed.font};
+                        line-height: ${computed.lineHeight};
+                        width: ${computed.width};
+                    `
+                    mirror.textContent = value.substring(0, selectionEnd)
+                    window.document.body.appendChild(mirror)
+
+                    const lineHeight = parseFloat(computed.lineHeight) || 24
+                    const lines = mirror.offsetHeight / lineHeight
+                    window.document.body.removeChild(mirror)
+
+                    y = rect.top + (lines * lineHeight) + gap
+
+                    // Viewport boundary check
+                    if (x < 80) x = 80
+                    if (x > window.innerWidth - 80) x = window.innerWidth - 80
+                    if (y > window.innerHeight - 50) {
+                        y = rect.top - 40 - gap
+                    }
+
+                    setTextSelectionTooltip({
+                        text: selectedText,
+                        position: { x, y },
+                        blockId: focusedBlockId || ''
+                    })
+                    return
+                }
+
+                // Regular DOM selection (preview mode)
+                const selection = window.getSelection()
+
+                if (!selection || selection.isCollapsed || !selection.toString().trim()) {
+                    setTextSelectionTooltip(null)
+                    return
+                }
+
+                // Check if selection is within the editor
+                const range = selection.getRangeAt(0)
+                const editorElement = editorRef.current
+                if (!editorElement || !editorElement.contains(range.commonAncestorContainer)) {
+                    setTextSelectionTooltip(null)
+                    return
+                }
+
+                const rect = range.getBoundingClientRect()
+
+                // Position tooltip at bottom center of selection
+                const gap = 8
+                let x = rect.left + rect.width / 2
+                let y = rect.bottom + gap
+
+                // Viewport boundary check
+                if (x < 80) x = 80
+                if (x > window.innerWidth - 80) x = window.innerWidth - 80
+                if (y > window.innerHeight - 50) {
+                    // Move to top if near bottom
+                    y = rect.top - 40 - gap
+                }
+
+                setTextSelectionTooltip({
+                    text: selection.toString(),
+                    position: { x, y },
+                    blockId: focusedBlockId || ''
+                })
+            }, 10)
+        }
+
+        const handleSelectionChange = () => {
+            const activeEl = window.document.activeElement
+
+            // For textarea, check its selection
+            if (activeEl instanceof HTMLTextAreaElement) {
+                const { selectionStart, selectionEnd } = activeEl
+                if (selectionStart === selectionEnd) {
+                    setTextSelectionTooltip(null)
+                }
+                return
+            }
+
+            // For regular DOM
+            const selection = window.getSelection()
+            if (!selection || selection.isCollapsed) {
+                setTextSelectionTooltip(null)
+            }
+        }
+
+        window.document.addEventListener('mouseup', handleMouseUp)
+        window.document.addEventListener('selectionchange', handleSelectionChange)
+
+        return () => {
+            window.document.removeEventListener('mouseup', handleMouseUp)
+            window.document.removeEventListener('selectionchange', handleSelectionChange)
+        }
+    }, [focusedBlockId])
 
     const mergeWithPrevious = useCallback((blockId: string) => {
         isLocalUpdate.current = true
@@ -1925,8 +2149,29 @@ export default function BlockEditor({ document, tabId, viewMode }: BlockEditorPr
             <div className="document-header">
                 <input
                     className="document-title-input"
-                    value={document.meta.title}
-                    onChange={(e) => updateDocumentMeta(tabId, { title: e.target.value })}
+                    value={headerTitle}
+                    onChange={(e) => setHeaderTitle(e.target.value)}
+                    onBlur={async () => {
+                        const newName = headerTitle.trim()
+                        if (newName && newName !== currentFileName) {
+                            const newFileName = newName.endsWith('.md') ? newName : `${newName}.md`
+                            const success = await renameItem(document.filePath, newFileName)
+                            if (success) {
+                                // Update tab path via editorStore
+                                const parentPath = document.filePath.substring(0, document.filePath.lastIndexOf('/'))
+                                renameFile(document.filePath, `${parentPath}/${newFileName}`)
+                            } else {
+                                // Revert on failure
+                                setHeaderTitle(currentFileName)
+                            }
+                        }
+                    }}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                            e.preventDefault()
+                            e.currentTarget.blur()
+                        }
+                    }}
                     placeholder="Untitled"
                 />
                 <div className="document-meta-vertical">
@@ -2338,6 +2583,25 @@ export default function BlockEditor({ document, tabId, viewMode }: BlockEditorPr
                         }
                         setHighlightTooltip(null)
                     }}
+                />
+            )}
+
+            {/* Text Selection Tooltip for Chat */}
+            {textSelectionTooltip && (
+                <TextSelectionTooltip
+                    position={textSelectionTooltip.position}
+                    onChatClick={() => {
+                        setSelectedTextContext({
+                            text: textSelectionTooltip.text,
+                            blockId: textSelectionTooltip.blockId,
+                            filePath: document.filePath
+                        })
+                        openAIPanel()
+                        setTextSelectionTooltip(null)
+                        // Clear the text selection
+                        window.getSelection()?.removeAllRanges()
+                    }}
+                    onClose={() => setTextSelectionTooltip(null)}
                 />
             )}
         </div>

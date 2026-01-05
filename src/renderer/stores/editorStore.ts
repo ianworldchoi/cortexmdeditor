@@ -757,7 +757,7 @@ function parseMarkdownToDocument(content: string, filePath: string): Document {
     return { meta, blocks, filePath }
 }
 
-function parseContentToBlocks(content: string): Block[] {
+export function parseContentToBlocks(content: string): Block[] {
     const lines = content.split('\n')
     const blocks: Block[] = []
     let pendingTextLines: string[] = [] // Buffer for consecutive text lines

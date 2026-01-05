@@ -38,8 +38,29 @@ interface FileTreeItemProps {
     collapseAll?: number
 }
 
+// localStorage key for folder expanded states
+const FOLDER_STATE_KEY = 'fileTree_expandedFolders'
+
+// Helper functions to manage folder state in localStorage
+function getExpandedFolders(): Set<string> {
+    try {
+        const stored = localStorage.getItem(FOLDER_STATE_KEY)
+        return stored ? new Set(JSON.parse(stored)) : new Set()
+    } catch {
+        return new Set()
+    }
+}
+
+function saveExpandedFolders(folders: Set<string>) {
+    localStorage.setItem(FOLDER_STATE_KEY, JSON.stringify([...folders]))
+}
+
 function FileTreeItem({ node, level, collapseAll }: FileTreeItemProps) {
-    const [isExpanded, setIsExpanded] = useState(false)  // 디폴트: 접혀있음
+    // 저장된 상태가 있으면 복원, 없으면 닫힘 상태
+    const [isExpanded, setIsExpanded] = useState(() => {
+        if (!node.isDirectory) return false
+        return getExpandedFolders().has(node.path)
+    })
     const [isDragOver, setIsDragOver] = useState(false)
     const [showContextMenu, setShowContextMenu] = useState(false)
     const [contextMenuPos, setContextMenuPos] = useState({ x: 0, y: 0 })
@@ -49,10 +70,27 @@ function FileTreeItem({ node, level, collapseAll }: FileTreeItemProps) {
     const { openTab, editorGroups, activeGroupId } = useEditorStore()
     const { moveItem, deleteItem } = useVaultStore()
     const itemRef = useRef<HTMLDivElement>(null)
+    const isInitialMount = useRef(true)
 
     const activeGroup = editorGroups.find(g => g.id === activeGroupId)
     const activeTab = activeGroup?.tabs.find(t => t.id === activeGroup.activeTabId)
     const isActive = activeTab?.filePath === node.path
+
+    // isExpanded 상태 변경 시 localStorage에 저장 (초기 마운트 제외)
+    useEffect(() => {
+        if (!node.isDirectory) return
+        if (isInitialMount.current) {
+            isInitialMount.current = false
+            return
+        }
+        const folders = getExpandedFolders()
+        if (isExpanded) {
+            folders.add(node.path)
+        } else {
+            folders.delete(node.path)
+        }
+        saveExpandedFolders(folders)
+    }, [isExpanded, node.isDirectory, node.path])
 
     // collapseAll prop이 변경되면 모든 폴더를 접음
     useEffect(() => {

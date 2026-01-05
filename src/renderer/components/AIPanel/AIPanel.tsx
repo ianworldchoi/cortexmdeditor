@@ -3,7 +3,7 @@ import { Settings, X, FileText, Library, Send, ArrowRight, Zap, Sparkles, Plus, 
 import { useVaultStore } from '../../stores/vaultStore'
 import { useAIStore, type AIModel, type AIAttachment } from '../../stores/aiStore'
 import SessionHistoryModal from './SessionHistoryModal'
-import { useEditorStore } from '../../stores/editorStore'
+import { useEditorStore, parseContentToBlocks } from '../../stores/editorStore'
 import { sendMessage } from '../../services/geminiService'
 import SettingsModal from '../Settings/SettingsModal'
 import MentionDropdown, { type MentionedItem } from './MentionDropdown'
@@ -46,7 +46,9 @@ export default function AIPanel() {
         truncateMessagesAfter,
         isPanelOpen,
         webSearchEnabled,
-        setWebSearchEnabled
+        setWebSearchEnabled,
+        selectedTextContext,
+        clearSelectedTextContext
     } = useAIStore()
     const { getActiveDocument, editorGroups, activeGroupId, updateDocument, updateDocumentMeta } = useEditorStore()
     const { refreshTree, vaultPath } = useVaultStore()
@@ -114,6 +116,7 @@ export default function AIPanel() {
     const [showReviewModal, setShowReviewModal] = useState(false)
     const [pendingActions, setPendingActions] = useState<AIAction[]>([])
     const [pendingAttachments, setPendingAttachments] = useState<AIAttachment[]>([])
+    const [streamingContent, setStreamingContent] = useState('')
     const messagesEndRef = useRef<HTMLDivElement>(null)
     const inputRef = useRef<HTMLTextAreaElement>(null)
     const fileInputRef = useRef<HTMLInputElement>(null)
@@ -191,20 +194,28 @@ export default function AIPanel() {
     const vaultDocCount = editorGroups.reduce((acc, group) => acc + group.tabs.length, 0)
 
     const handleSubmit = async () => {
-        if ((!input.trim() && pendingAttachments.length === 0 && mentionedItems.length === 0) || isLoading) return
+        if ((!input.trim() && pendingAttachments.length === 0 && mentionedItems.length === 0 && !selectedTextContext) || isLoading) return
 
         if (!apiKey) {
             setShowSettings(true)
             return
         }
 
-        const userMessage = input.trim()
+        // Build user message with selected text context if present
+        let userMessage = input.trim()
+        if (selectedTextContext) {
+            const contextPrefix = `[Selected Text]\n\`\`\`\n${selectedTextContext.text}\n\`\`\`\n\n`
+            userMessage = contextPrefix + userMessage
+        }
+
         const attachmentsToSend = [...pendingAttachments]
         const mentionsToSend = [...mentionedItems]
 
         setInput('')
         setPendingAttachments([])
         setMentionedItems([])
+        clearSelectedTextContext()
+        setStreamingContent('')
 
         addMessage('user', userMessage, attachmentsToSend)
         setLoading(true)
@@ -220,13 +231,23 @@ export default function AIPanel() {
                 activeDocument,
                 attachmentsToSend,
                 mentionsToSend,
-                controller.signal
+                controller.signal,
+                // Streaming callback
+                (chunk) => {
+                    setStreamingContent(chunk)
+                }
             )
+            // Clear streaming content and add final message
+            setStreamingContent('')
             addMessage('assistant', response)
         } catch (error) {
+            setStreamingContent('')
             if (error instanceof Error && error.name === 'AbortError') {
                 console.log('Generation aborted by user')
-                // Optional: Add a system message saying "Generation stopped"
+                // If there was streaming content, save it as partial response
+                if (streamingContent) {
+                    addMessage('assistant', streamingContent + '\n\n*[Generation stopped]*')
+                }
             } else {
                 addMessage(
                     'assistant',
@@ -315,8 +336,9 @@ export default function AIPanel() {
                 e.preventDefault()
                 closeMentionDropdown()
             }
-            // Let arrow keys and Enter propagate to dropdown
+            // Let arrow keys and Enter propagate to dropdown, but prevent default submit
             if (['ArrowUp', 'ArrowDown', 'Enter', 'Tab'].includes(e.key)) {
+                e.preventDefault()
                 return
             }
         }
@@ -338,7 +360,7 @@ export default function AIPanel() {
 
         // Detect @ trigger
         const textBeforeCursor = value.slice(0, cursorPos)
-        const atMatch = textBeforeCursor.match(/@([\w:]*)?$/)
+        const atMatch = textBeforeCursor.match(/@([^\n@]*)?$/)
 
         if (atMatch) {
             mentionStartRef.current = cursorPos - atMatch[0].length
@@ -372,6 +394,27 @@ export default function AIPanel() {
         setShowMentionDropdown(false)
         setMentionQuery('')
         mentionStartRef.current = null
+    }
+
+    const handleMenuSelect = (menuId: 'files' | 'directory') => {
+        // Update input to show @files: or @directory:
+        if (mentionStartRef.current !== null) {
+            const before = input.slice(0, mentionStartRef.current)
+            const after = input.slice(inputRef.current?.selectionStart || input.length)
+            const newInput = before + `@${menuId}:` + after
+            setInput(newInput)
+            setMentionQuery(`${menuId}:`)
+
+            // Set cursor position after the colon
+            setTimeout(() => {
+                if (inputRef.current) {
+                    const cursorPos = before.length + menuId.length + 2 // +2 for @ and :
+                    inputRef.current.selectionStart = cursorPos
+                    inputRef.current.selectionEnd = cursorPos
+                    inputRef.current.focus()
+                }
+            }, 0)
+        }
     }
 
     const removeMentionedItem = (path: string) => {
@@ -524,17 +567,24 @@ export default function AIPanel() {
             if (action.type === 'update' && action.id && action.content !== undefined) {
                 const index = updatedBlocks.findIndex(b => b.block_id === action.id)
                 if (index !== -1) {
-                    updatedBlocks[index] = { ...updatedBlocks[index], content: action.content }
+                    // Parse the content into blocks
+                    const parsedBlocks = parseContentToBlocks(action.content)
+                    if (parsedBlocks.length === 1) {
+                        updatedBlocks[index] = {
+                            ...updatedBlocks[index],
+                            content: parsedBlocks[0].content,
+                            type: parsedBlocks[0].type
+                        }
+                    } else {
+                        updatedBlocks.splice(index, 1, ...parsedBlocks)
+                    }
                 }
             } else if (action.type === 'insert' && action.afterId && action.content !== undefined) {
                 const index = updatedBlocks.findIndex(b => b.block_id === action.afterId)
                 if (index !== -1) {
-                    const newBlock: Block = {
-                        block_id: crypto.randomUUID(),
-                        type: action.blockType || 'text',
-                        content: action.content
-                    }
-                    updatedBlocks.splice(index + 1, 0, newBlock)
+                    // Parse the content into blocks
+                    const parsedBlocks = parseContentToBlocks(action.content)
+                    updatedBlocks.splice(index + 1, 0, ...parsedBlocks)
                 }
             } else if (action.type === 'delete' && action.id) {
                 updatedBlocks = updatedBlocks.filter(b => b.block_id !== action.id)
@@ -591,6 +641,100 @@ export default function AIPanel() {
     // Extract code from code block
     const extractCodeContent = (code: string): string => {
         return code.trim()
+    }
+
+    // ThinkingToggle Component - Collapsible accordion for thinking content
+    const ThinkingToggle = ({ content, isStreaming = false }: { content: string; isStreaming?: boolean }) => {
+        // Auto-open while streaming, collapse when complete
+        const [isOpen, setIsOpen] = useState(isStreaming)
+
+        // Auto-collapse when streaming ends
+        useEffect(() => {
+            if (!isStreaming && isOpen) {
+                setIsOpen(false)
+            }
+        }, [isStreaming])
+
+        return (
+            <div className="thinking-toggle">
+                <div
+                    className="thinking-toggle-header"
+                    onClick={() => setIsOpen(!isOpen)}
+                >
+                    <span className={`thinking-toggle-icon ${isOpen ? 'open' : ''}`}>▶</span>
+                    <span className="thinking-toggle-label">
+                        {isStreaming ? 'Thinking...' : 'Thinking'}
+                    </span>
+                </div>
+                {isOpen && (
+                    <div className="thinking-toggle-content">
+                        {content}
+                    </div>
+                )}
+            </div>
+        )
+    }
+
+    // Parse content for thinking sections and render with toggle
+    const renderMessageWithThinking = (content: string, messageId: string, isStreaming = false) => {
+        // Check if content contains thinking tags
+        const thinkingMatch = content.match(/<thinking>([\s\S]*?)<\/thinking>/g)
+
+        if (!thinkingMatch) {
+            // Check if streaming and partially has <thinking> but not closed
+            const partialThinkingStart = content.indexOf('<thinking>')
+            if (isStreaming && partialThinkingStart !== -1 && content.indexOf('</thinking>') === -1) {
+                const thinkingContent = content.slice(partialThinkingStart + 10)
+                const beforeThinking = content.slice(0, partialThinkingStart)
+
+                return (
+                    <>
+                        {beforeThinking && <span style={{ whiteSpace: 'pre-wrap' }}>{beforeThinking}</span>}
+                        <ThinkingToggle content={thinkingContent} isStreaming={true} />
+                    </>
+                )
+            }
+
+            // No thinking tags, render normally
+            return renderMessage(content, messageId)
+        }
+
+        // Parse thinking sections and regular content
+        const parts: React.ReactNode[] = []
+        let lastIndex = 0
+        const thinkingRegex = /<thinking>([\s\S]*?)<\/thinking>/g
+        let match
+
+        while ((match = thinkingRegex.exec(content)) !== null) {
+            // Add content before thinking
+            if (match.index > lastIndex) {
+                const beforeContent = content.slice(lastIndex, match.index).trim()
+                if (beforeContent) {
+                    parts.push(
+                        <span key={`before-${lastIndex}`} style={{ whiteSpace: 'pre-wrap' }}>
+                            {beforeContent}
+                        </span>
+                    )
+                }
+            }
+
+            // Add thinking toggle
+            parts.push(
+                <ThinkingToggle key={`thinking-${match.index}`} content={match[1]} isStreaming={false} />
+            )
+
+            lastIndex = match.index + match[0].length
+        }
+
+        // Add remaining content after thinking
+        if (lastIndex < content.length) {
+            const afterContent = content.slice(lastIndex).trim()
+            if (afterContent) {
+                parts.push(renderMessage(afterContent, messageId))
+            }
+        }
+
+        return <>{parts}</>
     }
 
     // Render markdown code blocks with copy and apply buttons
@@ -1166,21 +1310,26 @@ export default function AIPanel() {
                                     </div>
                                 )}
                                 {message.role === 'assistant'
-                                    ? renderMessage(message.content, message.id)
+                                    ? renderMessageWithThinking(message.content, message.id, false)
                                     : message.content}
                             </div>
                         </div>
                     ))}
 
-                    {isLoading && (
+                    {/* Streaming content display */}
+                    {isLoading && streamingContent && (
                         <div className="ai-message assistant">
-                            <div
-                                className="ai-message-content"
-                                style={{ display: 'flex', gap: 4 }}
-                            >
-                                <span style={{ animation: 'pulse 1.5s infinite' }}>●</span>
-                                <span style={{ animation: 'pulse 1.5s infinite 0.2s' }}>●</span>
-                                <span style={{ animation: 'pulse 1.5s infinite 0.4s' }}>●</span>
+                            <div className="ai-message-content">
+                                {renderMessageWithThinking(streamingContent, 'streaming', true)}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Shimmer loading indicator when no streaming content yet */}
+                    {isLoading && !streamingContent && (
+                        <div className="ai-message assistant">
+                            <div className="ai-message-content">
+                                <span className="shimmer-text">Thinking...</span>
                             </div>
                         </div>
                     )}
@@ -1285,6 +1434,7 @@ export default function AIPanel() {
                             <MentionDropdown
                                 query={mentionQuery}
                                 onSelect={handleMentionSelect}
+                                onMenuSelect={handleMenuSelect}
                                 onClose={closeMentionDropdown}
                                 inputRef={inputRef}
                             />
@@ -1311,6 +1461,50 @@ export default function AIPanel() {
                                         </button>
                                     </div>
                                 ))}
+                            </div>
+                        )}
+
+                        {/* Selected Text Chip */}
+                        {selectedTextContext && (
+                            <div className="ai-selected-text-chip-container" style={{
+                                padding: '0 12px 8px',
+                            }}>
+                                <div className="ai-selected-text-chip" style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: 6,
+                                    maxWidth: '100%',
+                                    padding: '4px 8px',
+                                    background: 'var(--color-bg-tertiary)',
+                                    border: '1px solid var(--color-border)',
+                                    borderRadius: 'var(--radius-sm)',
+                                    fontSize: 'var(--text-xs)',
+                                    color: 'var(--color-text-secondary)',
+                                }}>
+                                    <span style={{
+                                        overflow: 'hidden',
+                                        textOverflow: 'ellipsis',
+                                        whiteSpace: 'nowrap',
+                                        maxWidth: 200,
+                                    }}>
+                                        "{selectedTextContext.text}"
+                                    </span>
+                                    <button
+                                        onClick={clearSelectedTextContext}
+                                        style={{
+                                            flexShrink: 0,
+                                            background: 'none',
+                                            border: 'none',
+                                            cursor: 'pointer',
+                                            padding: 0,
+                                            display: 'flex',
+                                            color: 'var(--color-text-tertiary)',
+                                        }}
+                                        title="Remove"
+                                    >
+                                        <X size={12} />
+                                    </button>
+                                </div>
                             </div>
                         )}
 
@@ -1435,7 +1629,44 @@ export default function AIPanel() {
                     onClose={() => setShowReviewModal(false)}
                     diffs={getDiffsForFile(activeDocument.filePath)}
                     onAcceptDiff={(diffId) => {
-                        acceptDiff(activeDocument.filePath, diffId)
+                        const diff = acceptDiff(activeDocument.filePath, diffId)
+                        if (diff && activeDocument) {
+                            const activeGroup = editorGroups.find(g => g.id === activeGroupId)
+                            const activeTabId = activeGroup?.activeTabId
+                            if (!activeTabId) return
+
+                            let updatedBlocks = [...activeDocument.blocks]
+
+                            if (diff.type === 'update' && diff.blockId && diff.newContent !== undefined) {
+                                const index = updatedBlocks.findIndex(b => b.block_id === diff.blockId)
+                                if (index !== -1) {
+                                    // Parse the new content into blocks
+                                    const parsedBlocks = parseContentToBlocks(diff.newContent)
+                                    if (parsedBlocks.length === 1) {
+                                        // Single block: just update content
+                                        updatedBlocks[index] = {
+                                            ...updatedBlocks[index],
+                                            content: parsedBlocks[0].content,
+                                            type: parsedBlocks[0].type
+                                        }
+                                    } else {
+                                        // Multiple blocks: replace the target block with parsed blocks
+                                        updatedBlocks.splice(index, 1, ...parsedBlocks)
+                                    }
+                                }
+                            } else if (diff.type === 'insert' && diff.blockId && diff.newContent !== undefined) {
+                                const index = updatedBlocks.findIndex(b => b.block_id === diff.blockId)
+                                if (index !== -1) {
+                                    // Parse the new content into blocks
+                                    const parsedBlocks = parseContentToBlocks(diff.newContent)
+                                    updatedBlocks.splice(index + 1, 0, ...parsedBlocks)
+                                }
+                            } else if (diff.type === 'delete' && diff.blockId) {
+                                updatedBlocks = updatedBlocks.filter(b => b.block_id !== diff.blockId)
+                            }
+
+                            updateDocument(activeTabId, updatedBlocks)
+                        }
                     }}
                     onRejectDiff={(diffId) => {
                         rejectDiff(activeDocument.filePath, diffId)

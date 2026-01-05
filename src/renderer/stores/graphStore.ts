@@ -22,7 +22,8 @@ export interface GraphLink extends SimulationLinkDatum<GraphNode> {
 
 interface ParsedDoc {
     path: string
-    title: string
+    title: string // Now primarily the Filename
+    frontmatterTitle?: string // The title from YAML
     tags: string[]
     links: string[] // Target IDs (paths or names)
     linkContexts: Map<string, string> // Map of link target to the line containing it
@@ -81,10 +82,11 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         const backlinks: { path: string; title: string; context: string }[] = []
         const seen = new Set<string>()
 
-        // Extract the note's title and filename for matching
+        // Extract the note's title (filename) and frontmatter title
         const currentDoc = parsedDocs.get(noteId)
-        const currentTitle = currentDoc?.title || ''
         const currentFileName = noteId.split('/').pop()?.replace('.md', '') || ''
+        const currentTitle = currentDoc?.title || currentFileName // This is now the filename
+        const currentFrontmatterTitle = currentDoc?.frontmatterTitle
 
         // Iterate through all parsed docs to find those that link to this note
         parsedDocs.forEach((doc, docPath) => {
@@ -93,7 +95,10 @@ export const useGraphStore = create<GraphState>((set, get) => ({
 
             // Check if any of the doc's links point to our note
             const matchingLink = doc.links.find(linkTarget => {
-                return linkTarget === currentTitle || linkTarget === currentFileName
+                // Match against Filename (Primary) OR Frontmatter Title (Secondary/Legacy)
+                return linkTarget === currentFileName ||
+                    linkTarget === currentTitle ||
+                    (currentFrontmatterTitle && linkTarget === currentFrontmatterTitle)
             })
 
             if (matchingLink && !seen.has(docPath)) {
@@ -102,7 +107,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
                 const context = doc.linkContexts.get(matchingLink) || `[[${matchingLink}]]`
                 backlinks.push({
                     path: docPath,
-                    title: doc.title,
+                    title: doc.title, // Use the display title (filename)
                     context
                 })
             }
@@ -309,13 +314,21 @@ export const useGraphStore = create<GraphState>((set, get) => ({
 
             fileContents.forEach(({ path, content }) => {
                 const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/)
-                let title = path.split('/').pop()?.replace('.md', '') || 'Untitled'
+                const fileName = path.split('/').pop()?.replace('.md', '') || 'Untitled'
+
+                // Primary Title is now Filename
+                let title = fileName
+                let frontmatterTitle: string | undefined = undefined
                 let tags: string[] = []
 
                 if (frontmatterMatch) {
                     const fm = frontmatterMatch[1]
                     const titleMatch = fm.match(/title:\s*(.+)/)
-                    if (titleMatch) title = titleMatch[1].trim()
+                    if (titleMatch) {
+                        frontmatterTitle = titleMatch[1].trim()
+                        // We do NOT overwrite 'title' with frontmatterTitle anymore. 
+                        // title remains as fileName.
+                    }
 
                     const tagsMatch = fm.match(/tags:\s*\[(.*?)\]/)
                     if (tagsMatch) {
@@ -374,6 +387,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
                 parsedDocs.set(path, {
                     path,
                     title,
+                    frontmatterTitle,
                     tags,
                     links: outLinks,
                     linkContexts

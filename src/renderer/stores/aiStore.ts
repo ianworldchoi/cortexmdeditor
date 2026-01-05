@@ -28,6 +28,12 @@ export interface ChatSession {
     vaultPath?: string
 }
 
+export interface SelectedTextContext {
+    text: string
+    blockId: string
+    filePath: string
+}
+
 interface AIState {
     isPanelOpen: boolean
     panelWidth: number
@@ -37,8 +43,10 @@ interface AIState {
     isLoading: boolean
     customSystemPrompt: string
     vaultSystemPrompts: Record<string, string>
+    folderPrompts: Record<string, string>  // key: absolute folder path, value: prompt
     selectedModel: AIModel
     webSearchEnabled: boolean
+    selectedTextContext: SelectedTextContext | null
 
     // Actions
     togglePanel: () => void
@@ -65,6 +73,13 @@ interface AIState {
     resetSystemPrompt: () => void
     setSelectedModel: (model: AIModel) => void
     setWebSearchEnabled: (enabled: boolean) => void
+    setSelectedTextContext: (context: SelectedTextContext | null) => void
+
+    // Folder Prompts
+    setFolderPrompt: (folderPath: string, prompt: string) => void
+    deleteFolderPrompt: (folderPath: string) => void
+    getFolderPromptForPath: (filePath: string) => string | null
+    clearSelectedTextContext: () => void
 }
 
 const DEFAULT_SYSTEM_PROMPT = `You are an AI assistant integrated into Cortex, a local-first Markdown note-taking app.
@@ -176,8 +191,10 @@ export const useAIStore = create<AIState>()(
             isLoading: false,
             customSystemPrompt: DEFAULT_SYSTEM_PROMPT,
             vaultSystemPrompts: {},
+            folderPrompts: {},
             selectedModel: 'gemini-3-pro-preview',
             webSearchEnabled: false,
+            selectedTextContext: null,
 
             togglePanel: () => set((state) => ({ isPanelOpen: !state.isPanelOpen })),
             openPanel: () => set({ isPanelOpen: true }),
@@ -326,7 +343,48 @@ export const useAIStore = create<AIState>()(
             resetSystemPrompt: () => set({ customSystemPrompt: DEFAULT_SYSTEM_PROMPT }),
 
             setSelectedModel: (model) => set({ selectedModel: model }),
-            setWebSearchEnabled: (enabled) => set({ webSearchEnabled: enabled })
+            setWebSearchEnabled: (enabled) => set({ webSearchEnabled: enabled }),
+            setSelectedTextContext: (context) => set({ selectedTextContext: context }),
+
+            // Folder Prompts
+            setFolderPrompt: (folderPath, prompt) => set(state => {
+                if (!prompt.trim()) {
+                    // If empty, delete instead
+                    const newPrompts = { ...state.folderPrompts }
+                    delete newPrompts[folderPath]
+                    return { folderPrompts: newPrompts }
+                }
+                return {
+                    folderPrompts: { ...state.folderPrompts, [folderPath]: prompt }
+                }
+            }),
+
+            deleteFolderPrompt: (folderPath) => set(state => {
+                const newPrompts = { ...state.folderPrompts }
+                delete newPrompts[folderPath]
+                return { folderPrompts: newPrompts }
+            }),
+
+            getFolderPromptForPath: (filePath) => {
+                const { folderPrompts } = get()
+                const vaultPath = useVaultStore.getState().vaultPath
+                if (!vaultPath) return null
+
+                // Start from file's parent folder and traverse up
+                let currentPath = filePath.substring(0, filePath.lastIndexOf('/'))
+
+                while (currentPath.length >= vaultPath.length) {
+                    if (folderPrompts[currentPath]) {
+                        return folderPrompts[currentPath]
+                    }
+                    // Move to parent folder
+                    const parentPath = currentPath.substring(0, currentPath.lastIndexOf('/'))
+                    if (parentPath === currentPath) break // Reached root
+                    currentPath = parentPath
+                }
+                return null
+            },
+            clearSelectedTextContext: () => set({ selectedTextContext: null })
         }),
         {
             name: 'cortex-ai',
@@ -339,10 +397,18 @@ export const useAIStore = create<AIState>()(
                 sessions: state.sessions,
                 activeSessionId: state.activeSessionId,
                 vaultSystemPrompts: state.vaultSystemPrompts,
+                folderPrompts: state.folderPrompts,
                 webSearchEnabled: state.webSearchEnabled
             }),
-            version: 5, // Bump version
+            version: 6, // Bump version for folderPrompts
             migrate: (persistedState: any, version: number) => {
+                // Migration to v6 (Folder Prompts)
+                if (version < 6) {
+                    persistedState = {
+                        ...persistedState,
+                        folderPrompts: {},
+                    }
+                }
                 // Migration to v5 (Vault System Prompts)
                 if (version < 5) {
                     persistedState = {

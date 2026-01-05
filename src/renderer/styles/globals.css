@@ -48,7 +48,7 @@
   --color-bg-sidebar: var(--gray-1);
   --color-bg-editor: var(--gray-0);
 
-  --color-app-gradient: linear-gradient(180deg, var(--primary-0-light) 0%, transparent 60%);
+  --color-app-gradient: linear-gradient(180deg, var(--color-bg-editor) 0%, var(--color-bg-sidebar) 120%);
 
   --color-text-primary: var(--gray-22);
   --color-text-secondary: var(--gray-13);
@@ -196,8 +196,8 @@
   --font-mono: 'SF Mono', 'Fira Code', 'Consolas', monospace;
 
   --text-xs: 11px;
-  --text-sm: 13px;
-  --text-base: 15px;
+  --text-sm: 14px;
+  --text-base: 16px;
   --text-lg: 17px;
   --text-xl: 20px;
   --text-2xl: 24px;

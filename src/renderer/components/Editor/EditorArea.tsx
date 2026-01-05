@@ -113,8 +113,8 @@ function ScrollableEditor({ document, tabId, viewMode, hasAnimated }: Scrollable
 
     const animationClass = !hasAnimated ? 'animate-file-load' : ''
 
-    // Extract filename from document
-    const fileName = document?.meta?.title || document?.filePath?.split('/').pop()?.replace(/\.md$/, '') || 'Untitled'
+    // Extract filename from document (Prioritize Filename over Frontmatter Title)
+    const fileName = document?.filePath?.split('/').pop()?.replace(/\.md$/, '') || document?.meta?.title || 'Untitled'
 
     // Image drop handlers
     const handleDragOver = useCallback((e: React.DragEvent) => {

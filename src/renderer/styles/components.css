@@ -367,7 +367,7 @@
     background: var(--color-bg-active);
     color: var(--color-text-primary);
     font-weight: 500;
-    border-radius: var(--radius-xl);
+    border-radius: var(--radius-sm-plus);
     position: relative;
     z-index: 2;
     box-shadow: none;
@@ -496,9 +496,9 @@
 /* Editor Area Container - Unified Wrapper */
 .editor-area-container {
     background: var(--color-bg-editor);
-    border-radius: var(--radius-xl);
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
     box-shadow: var(--shadow-card);
-    margin: var(--space-2);
+    margin: var(--space-2) var(--space-2) 0 var(--space-2);
     overflow: hidden !important;
     /* Force clip children */
     border: 0.5px solid var(--color-border-normal);
@@ -1427,7 +1427,7 @@
 }
 
 .ai-message.user .ai-message-content {
-    background: var(--color-bg-editor);
+    background: var(--color-bg-tertiary);
     color: var(--color-text-primary);
     padding: var(--space-3) var(--space-4);
     border-radius: var(--radius-lg);
@@ -1441,6 +1441,94 @@
     background: transparent;
     color: var(--color-text-primary);
     padding: 0;
+}
+
+/* Shimmer Loading Animation */
+@keyframes shimmer {
+    0% {
+        background-position: -200% 0;
+    }
+
+    100% {
+        background-position: 200% 0;
+    }
+}
+
+.shimmer-text {
+    display: inline-block;
+    background: linear-gradient(90deg,
+            var(--color-text-tertiary) 25%,
+            var(--color-text-secondary) 50%,
+            var(--color-text-tertiary) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite linear;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    font-size: var(--text-sm);
+    font-weight: 500;
+}
+
+/* Thinking Toggle Accordion */
+.thinking-toggle {
+    margin-bottom: var(--space-3);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    background: transparent;
+    border: 1px solid var(--color-border);
+}
+
+.thinking-toggle-header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    cursor: pointer;
+    user-select: none;
+    font-size: var(--text-sm);
+    font-weight: 500;
+    color: var(--color-text-secondary);
+    transition: all var(--duration-fast);
+}
+
+.thinking-toggle-header:hover {
+    background: var(--color-bg-hover);
+    color: var(--color-text-primary);
+}
+
+.thinking-toggle-icon {
+    font-size: var(--text-xs);
+    transition: transform var(--duration-fast);
+    color: var(--color-text-tertiary);
+}
+
+.thinking-toggle-icon.open {
+    transform: rotate(90deg);
+}
+
+.thinking-toggle-label {
+    flex: 1;
+}
+
+.thinking-toggle-content {
+    padding: var(--space-3);
+    padding-top: 0;
+    font-size: var(--text-sm);
+    color: var(--color-text-tertiary);
+    line-height: var(--leading-relaxed);
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.thinking-toggle-content::-webkit-scrollbar {
+    width: 4px;
+}
+
+.thinking-toggle-content::-webkit-scrollbar-thumb {
+    background: var(--color-border);
+    border-radius: 2px;
 }
 
 /* Input Area */
@@ -3701,4 +3789,62 @@
     color: var(--color-text-secondary);
     min-width: 60px;
     text-align: center;
+}
+
+/* Preview Todo */
+.preview-todo {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+}
+
+.preview-todo .block-checkbox {
+    margin-top: 3px;
+    /* Align with text */
+}
+
+.preview-todo .checked {
+    text-decoration: line-through;
+    color: var(--color-text-tertiary);
+}
+
+/* Text Selection Tooltip */
+.text-selection-tooltip {
+    display: flex;
+    align-items: center;
+    padding: var(--space-1);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg);
+    z-index: 1000;
+    animation: fadeIn 0.1s ease;
+}
+
+.text-selection-tooltip button {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: var(--space-1) var(--space-2);
+    background: var(--color-bg-primary);
+    border: none;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    ;
+    font-size: var(--text-xs);
+    color: var(--color-text-primary);
+    transition: background var(--duration-fast);
+}
+
+.text-selection-tooltip button:hover {
+    background: var(--color-bg-hover);
+}
+
+.text-selection-tooltip kbd {
+    font-size: 10px;
+    padding: 1px 4px;
+    background: var(--color-bg-tertiary);
+    border-radius: 3px;
+    color: var(--color-text-tertiary);
+    font-family: var(--font-mono);
 }

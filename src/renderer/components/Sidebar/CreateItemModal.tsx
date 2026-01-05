@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { X, File, Folder } from 'lucide-react'
 import { useVaultStore } from '../../stores/vaultStore'
 import { useEditorStore } from '../../stores/editorStore'
+import { useAIStore } from '../../stores/aiStore'
 
 interface CreateItemModalProps {
     type: 'file' | 'folder'
@@ -16,7 +17,9 @@ export default function CreateItemModal({
 }: CreateItemModalProps) {
     const { createNewFile, createNewFolder } = useVaultStore()
     const { openTab } = useEditorStore()
+    const { setFolderPrompt } = useAIStore()
     const [name, setName] = useState('')
+    const [prompt, setPrompt] = useState('')
     const [isLoading, setIsLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
 
@@ -45,6 +48,11 @@ export default function CreateItemModal({
             } else {
                 const success = await createNewFolder(parentPath, name.trim())
                 if (success) {
+                    // Save folder prompt if provided
+                    if (prompt.trim()) {
+                        const folderPath = `${parentPath}/${name.trim()}`
+                        setFolderPrompt(folderPath, prompt.trim())
+                    }
                     onClose()
                 } else {
                     setError('Failed to create folder')
@@ -105,6 +113,30 @@ export default function CreateItemModal({
                                 >
                                     .md extension will be added automatically if not provided
                                 </p>
+                            )}
+                            {type === 'folder' && (
+                                <>
+                                    <label className="form-label" style={{ marginTop: 16 }}>
+                                        AI Prompt (optional)
+                                    </label>
+                                    <textarea
+                                        className="form-input"
+                                        value={prompt}
+                                        onChange={(e) => setPrompt(e.target.value)}
+                                        placeholder="이 폴더의 파일에서 AI 질문 시 자동으로 적용됩니다"
+                                        rows={3}
+                                        style={{ resize: 'vertical', minHeight: 72 }}
+                                    />
+                                    <p
+                                        style={{
+                                            marginTop: 8,
+                                            fontSize: 'var(--text-xs)',
+                                            color: 'var(--color-text-tertiary)'
+                                        }}
+                                    >
+                                        하위 폴더에 별도 프롬프트가 없으면 상위 프롬프트가 적용됩니다
+                                    </p>
+                                </>
                             )}
                             {error && (
                                 <p
