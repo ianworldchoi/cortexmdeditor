@@ -8,6 +8,7 @@ export interface MentionedItem {
     type: 'file' | 'directory'
     path: string
     name: string
+    frontmatterTitle?: string
 }
 
 interface MentionDropdownProps {
@@ -84,7 +85,8 @@ export default function MentionDropdown({ query, onSelect, onMenuSelect, onClose
                 .map(doc => ({
                     type: 'file' as const,
                     path: doc.path,
-                    name: doc.title || doc.path.split('/').pop()?.replace('.md', '') || ''
+                    name: doc.title, // This is now filename from vaultStore
+                    frontmatterTitle: (doc as any).frontmatterTitle
                 }))
         } else {
             // directory
@@ -184,7 +186,12 @@ export default function MentionDropdown({ query, onSelect, onMenuSelect, onClose
                 onMouseEnter={() => setSelectedIndex(index)}
             >
                 <FileText size={14} />
-                <span className="mention-name">{item.name}</span>
+                <div className="mention-name-container">
+                    <span className="mention-name">{item.name}</span>
+                    {(item as any).frontmatterTitle && (item as any).frontmatterTitle !== item.name && (
+                        <span className="mention-subtitle"> {(item as any).frontmatterTitle}</span>
+                    )}
+                </div>
             </div>
         )
     }, [results, selectedIndex, onSelect])

@@ -155,6 +155,16 @@
   --color-highlight-blue: var(--blue-1);
   --color-highlight-green: var(--green-1);
 
+  /* Semantic - Diff Colors (Light) */
+  --color-diff-delete-bg: var(--red-0);
+  --color-diff-delete-text: var(--red-5);
+  --color-diff-insert-bg: var(--green-0);
+  --color-diff-insert-text: var(--green-6);
+  --color-diff-btn-accept: var(--green-6);
+  --color-diff-btn-accept-text: var(--gray-0);
+  --color-diff-btn-reject: var(--red-5);
+  --color-diff-btn-reject-text: var(--gray-0);
+
   /* Shadows */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
   --shadow-md: 0 4px 24px -1px rgba(0, 0, 0, 0.08);
@@ -259,6 +269,16 @@
   --color-highlight-red: var(--red-8);
   --color-highlight-blue: var(--blue-8);
   --color-highlight-green: var(--green-8);
+
+  /* Semantic - Diff Colors (Dark) */
+  --color-diff-delete-bg: rgba(127, 29, 29, 0.6);
+  --color-diff-delete-text: var(--red-2);
+  --color-diff-insert-bg: rgba(20, 83, 45, 0.6);
+  --color-diff-insert-text: var(--green-2);
+  --color-diff-btn-accept: var(--green-8);
+  --color-diff-btn-accept-text: var(--green-2);
+  --color-diff-btn-reject: var(--red-9);
+  --color-diff-btn-reject-text: var(--red-2);
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);

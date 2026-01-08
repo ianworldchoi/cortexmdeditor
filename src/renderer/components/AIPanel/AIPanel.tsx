@@ -12,6 +12,7 @@ import { useDiffStore } from '../../stores/diffStore'
 import ReviewChangesModal from './ReviewChangesModal'
 import Button from '../common/Button'
 import { convertActionsToDiffs } from './diffHelpers'
+import AIMarkdown from './AIMarkdown'
 
 const MODEL_OPTIONS: { value: AIModel; label: string; icon: React.ReactNode }[] = [
     { value: 'gemini-3-flash-preview', label: 'Flash', icon: <Zap size={12} /> },
@@ -446,7 +447,7 @@ export default function AIPanel() {
     }
 
     // Dispatch Batch AI Actions (Transactional)
-    const dispatchBatchActions = (actions: AIAction[], messageId?: string) => {
+    const dispatchBatchActions = (actions: AIAction[], messageId?: string, skipDiffStore = false) => {
         console.log('Dispatching Batch Actions:', actions)
         const activeDocument = getActiveDocument()
         const activeGroup = editorGroups.find(g => g.id === activeGroupId)
@@ -460,8 +461,8 @@ export default function AIPanel() {
             a.type !== 'update' && a.type !== 'insert' && a.type !== 'delete'
         )
 
-        // For document edits: Store as diffs instead of applying immediately
-        if (documentEditActions.length > 0) {
+        // For document edits: Store as diffs instead of applying immediately (unless skipDiffStore)
+        if (documentEditActions.length > 0 && !skipDiffStore) {
             if (!activeDocument) {
                 console.error('Document edit actions require an active document')
                 return
@@ -642,11 +643,11 @@ export default function AIPanel() {
     const extractCodeContent = (code: string): string => {
         return code.trim()
     }
-
     // ThinkingToggle Component - Collapsible accordion for thinking content
     const ThinkingToggle = ({ content, isStreaming = false }: { content: string; isStreaming?: boolean }) => {
         // Auto-open while streaming, collapse when complete
         const [isOpen, setIsOpen] = useState(isStreaming)
+        const contentRef = useRef<HTMLDivElement>(null)
 
         // Auto-collapse when streaming ends
         useEffect(() => {
@@ -654,6 +655,13 @@ export default function AIPanel() {
                 setIsOpen(false)
             }
         }, [isStreaming])
+
+        // Auto-scroll to bottom of thinking content
+        useEffect(() => {
+            if (isOpen && contentRef.current) {
+                contentRef.current.scrollTop = contentRef.current.scrollHeight
+            }
+        }, [content, isOpen])
 
         return (
             <div className="thinking-toggle">
@@ -667,7 +675,10 @@ export default function AIPanel() {
                     </span>
                 </div>
                 {isOpen && (
-                    <div className="thinking-toggle-content">
+                    <div
+                        ref={contentRef}
+                        className="thinking-toggle-content"
+                    >
                         {content}
                     </div>
                 )}
@@ -740,7 +751,7 @@ export default function AIPanel() {
     // Render markdown code blocks with copy and apply buttons
     const renderMessage = (content: string, messageId: string) => {
         // Updated regex to catch batch-action
-        const codeBlockRegex = /```(\w+|json:batch-action)?\n([\s\S]*?)```/g
+        const codeBlockRegex = /```(\w+|json:batch-action)?\n([\s\S]*?)\n```/g
         const parts: React.ReactNode[] = []
         let lastIndex = 0
         let match
@@ -749,9 +760,7 @@ export default function AIPanel() {
             // Add text before code block
             if (match.index > lastIndex) {
                 parts.push(
-                    <span key={lastIndex} style={{ whiteSpace: 'pre-wrap' }}>
-                        {content.slice(lastIndex, match.index)}
-                    </span>
+                    <AIMarkdown key={lastIndex} content={content.slice(lastIndex, match.index)} />
                 )
             }
 
@@ -762,7 +771,7 @@ export default function AIPanel() {
             if (language === 'json:batch-action') {
                 let actions: AIAction[] = []
                 try {
-                    const sanitizedCode = code.replace(/```json/g, '').replace(/```/g, '').trim()
+                    const sanitizedCode = code.replace(/^```json\s+/, '').trim()
                     const parsed = JSON.parse(sanitizedCode)
                     if (Array.isArray(parsed)) {
                         actions = parsed
@@ -859,7 +868,7 @@ export default function AIPanel() {
                                                             {oldBlock.content.length > 50 ? oldBlock.content.slice(0, 50) + '...' : oldBlock.content}
                                                         </div>
                                                     )}
-                                                    <div className="ai-diff-arrow">Run ↓</div>
+
                                                     <div className="ai-diff-new">{action.content}</div>
                                                 </div>
                                             )}
@@ -881,7 +890,7 @@ export default function AIPanel() {
                                     )
                                 })}
                             </div>
-                            <div className="ai-action-btn-wrapper">
+                            <div className="ai-action-footer">
                                 {hasSnapshot(messageId) ? (
                                     <button
                                         className="ai-action-undo-btn"
@@ -890,19 +899,18 @@ export default function AIPanel() {
                                         ↩ Undo Changes
                                     </button>
                                 ) : (
-                                    <div style={{ display: 'flex', gap: '8px', width: '100%' }}>
+                                    <div className="ai-action-group">
                                         <Button
                                             variant="default"
                                             onClick={() => {
                                                 const diffsToReview = convertActionsToDiffs(actions, activeDocument)
-                                                console.log('Review Changes clicked', { actions, diffsToReview })
+                                                console.log('Review Changes clicked - adding inline diffs', { actions, diffsToReview })
 
                                                 if (activeDocument) {
+                                                    // Add diffs to store - editor will render inline
                                                     addDiffs(activeDocument.filePath, diffsToReview)
                                                 }
-
-                                                setPendingActions(actions)
-                                                setShowReviewModal(true)
+                                                // No modal - diffs will be shown inline in editor
                                             }}
                                             style={{ flex: 1 }}
                                         >
@@ -912,7 +920,11 @@ export default function AIPanel() {
                                             variant="primary"
                                             onClick={() => {
                                                 applyAllDiffs(actions)
-                                                dispatchBatchActions(actions, messageId)
+                                                // Clear any pending diffs for this file to prevent duplicates
+                                                if (activeDocument) {
+                                                    clearDiffsForFile(activeDocument.filePath)
+                                                }
+                                                dispatchBatchActions(actions, messageId, true) // skipDiffStore=true for Apply All
                                             }}
                                             style={{ flex: 1 }}
                                         >
@@ -968,226 +980,15 @@ export default function AIPanel() {
         // Add remaining text
         if (lastIndex < content.length) {
             parts.push(
-                <span key={lastIndex} style={{ whiteSpace: 'pre-wrap' }}>
-                    {content.slice(lastIndex)}
-                </span>
+                <AIMarkdown key={lastIndex} content={content.slice(lastIndex)} />
             )
         }
 
-        return parts.length > 0 ? parts : <span style={{ whiteSpace: 'pre-wrap' }}>{content}</span>
+        return parts.length > 0 ? parts : <AIMarkdown content={content} />
     }
 
     return (
         <>
-            <style>
-                {`
-                .ai-action-card {
-                    background: transparent;
-                    border: 1px solid var(--color-border);
-                    border-radius: var(--radius-md);
-                    margin: 8px 0;
-                    overflow: hidden;
-                    display: flex;
-                    flex-direction: column;
-                }
-                .ai-action-header {
-                    display: flex;
-                    align-items: center;
-                    gap: 6px;
-                    padding: 8px 12px;
-                    background: none
-                    border-bottom: 1px solid var(--color-border);
-                    font-size: var(--text-sm);
-                    font-weight: 600;
-                    color: var(--color-text-primary);
-                }
-                .ai-action-content {
-                    padding: 8px;
-                    max-height: 300px;
-                    overflow-y: auto;
-                    display: flex;
-                    flex-direction: column;
-                    gap: 8px;
-                }
-                .ai-diff-item {
-                    border: none;
-                    border-radius: var(--radius-sm);
-                    background: transparent;
-                    padding: 0;
-                    font-size: var(--text-xs);
-                }
-                .ai-diff-item.update { border-left: none; }
-                .ai-diff-item.insert { border-left: none; }
-                .ai-diff-item.delete { border-left: none; }
-                .ai-diff-item.create_file { border-left: none; }
-                .ai-diff-item.create_folder { border-left: none; }
-                .ai-diff-item.update_meta { border-left: none; }
-                
-                .ai-diff-header {
-                    display: flex;
-                    align-items: center;
-                    gap: 6px;
-                    margin-bottom: 6px;
-                    color: var(--color-text-secondary);
-                    font-weight: 500;
-                }
-                .ai-diff-type { font-weight: 700; font-size: 10px; }
-                .ai-diff-id { margin-left: auto; font-family: monospace; opacity: 0.5; }
-
-                .ai-diff-body {
-                    display: flex;
-                    flex-direction: column;
-                    gap: 4px;
-                }
-                .ai-diff-old {
-                    color: var(--color-text-tertiary);
-                    background: rgba(255, 0, 0, 0.05);
-                    padding: 4px;
-                    border-radius: 6px;
-                }
-                .ai-diff-new {
-                    color: var(--color-text-primary);
-                    background: rgba(0, 255, 0, 0.05);
-                    padding: 4px;
-                    border-radius: 6px;
-                    white-space: pre-wrap;
-                }
-                .ai-diff-arrow {
-                    text-align: center;
-                    font-size: 10px;
-                    color: var(--color-text-tertiary);
-                }
-
-                .ai-action-btn-wrapper {
-                    padding: 8px 8px;
-                }
-
-                .ai-action-apply-btn {
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    gap: 6px;
-                    width: 100%;
-                    padding: 10px;
-                    background: var(--color-accent);
-                    color: white;
-                    border: none;
-                    border-top: 1px solid var(--color-border);
-                    font-size: var(--text-sm);
-                    font-weight: 600;
-                    cursor: pointer;
-                    transition: background 0.2s;
-                    border-radius: 4px;
-                }
-                .ai-action-apply-btn:hover {
-                    background: var(--color-accent-hover);
-                }
-                .ai-action-undo-btn {
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    gap: 6px;
-                    width: 100%;
-                    padding: 10px;
-                    background: #dc2626;
-                    color: white;
-                    border: none;
-                    border-top: 1px solid var(--color-border);
-                    font-size: var(--text-sm);
-                    font-weight: 600;
-                    cursor: pointer;
-                    transition: background 0.2s;
-                    border-radius: 4px;
-                }
-                .ai-action-undo-btn:hover {
-                    background: #b91c1c;
-                }
-                
-                .ai-panel-title {
-                    flex: 1;
-                    white-space: nowrap;
-                    overflow: hidden;
-                    text-overflow: ellipsis;
-                    margin-right: 8px;
-                }
-
-                .ai-panel-action {
-                    background: transparent;
-                    border: none;
-                    color: var(--color-text-tertiary);
-                    cursor: pointer;
-                    padding: 4px;
-                    border-radius: 4px;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                }
-                .ai-panel-action:hover {
-                    background: var(--color-bg-tertiary);
-                    color: var(--color-text-primary);
-                }
-                .ai-attach-btn {
-                    background: transparent;
-                    border: none;
-                    color: var(--color-text-tertiary);
-                    cursor: pointer;
-                    padding: 8px;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                }
-                .ai-attach-btn:hover {
-                    color: var(--color-text-primary);
-                }
-                .pending-attachments {
-                    display: flex;
-                    flex-wrap: wrap;
-                    gap: 8px;
-                    padding: 0 8px 8px;
-                }
-                .pending-attachment {
-                    display: flex;
-                    align-items: center;
-                    gap: 6px;
-                    background: var(--color-bg-secondary);
-                    border: 1px solid var(--color-border);
-                    border-radius: 4px;
-                    padding: 4px 8px;
-                    font-size: 11px;
-                }
-                .remove-btn {
-                    background: transparent;
-                    border: none;
-                    cursor: pointer;
-                    color: var(--color-text-tertiary);
-                    padding: 0;
-                    display: flex;
-                }
-                .remove-btn:hover { color: var(--color-danger); }
-                
-                .ai-message-attachments {
-                    display: flex;
-                    flex-wrap: wrap;
-                    gap: 8px;
-                    margin-bottom: 8px;
-                }
-                .attachment-chip {
-                    display: flex;
-                    align-items: center;
-                    gap: 6px;
-                    background: rgba(0,0,0,0.1);
-                    padding: 4px 8px;
-                    border-radius: 4px;
-                    font-size: 11px;
-                }
-                .attachment-thumb {
-                    width: 20px;
-                    height: 20px;
-                    object-fit: cover;
-                    border-radius: 2px;
-                }
-                `}
-            </style>
             <div
                 className="ai-panel"
                 style={{
@@ -1239,9 +1040,9 @@ export default function AIPanel() {
                     onMouseDown={handleResizeStart}
                 />
 
-                <div className="ai-panel-header">
+                <div className="ai-panel-header titlebar-drag-region">
                     <span className="ai-panel-title" title={sessionTitle}>{sessionTitle}</span>
-                    <div style={{ display: 'flex', gap: 4 }}>
+                    <div className="titlebar-no-drag" style={{ display: 'flex', gap: 4 }}>
                         <button
                             className="ai-panel-action"
                             onClick={() => createSession()}
@@ -1617,66 +1418,76 @@ export default function AIPanel() {
                 </div>
             </div>
 
-            {showSettings && (
-                <SettingsModal onClose={() => setShowSettings(false)} />
-            )}
-            {showHistory && (
-                <SessionHistoryModal onClose={() => setShowHistory(false)} />
-            )}
-            {showReviewModal && activeDocument && (
-                <ReviewChangesModal
-                    isOpen={showReviewModal}
-                    onClose={() => setShowReviewModal(false)}
-                    diffs={getDiffsForFile(activeDocument.filePath)}
-                    onAcceptDiff={(diffId) => {
-                        const diff = acceptDiff(activeDocument.filePath, diffId)
-                        if (diff && activeDocument) {
-                            const activeGroup = editorGroups.find(g => g.id === activeGroupId)
-                            const activeTabId = activeGroup?.activeTabId
-                            if (!activeTabId) return
+            {
+                showSettings && (
+                    <SettingsModal onClose={() => setShowSettings(false)} />
+                )
+            }
+            {
+                showHistory && (
+                    <SessionHistoryModal onClose={() => setShowHistory(false)} />
+                )
+            }
+            {
+                showReviewModal && activeDocument && (
+                    <ReviewChangesModal
+                        isOpen={showReviewModal}
+                        onClose={() => setShowReviewModal(false)}
+                        diffs={getDiffsForFile(activeDocument.filePath)}
+                        onAcceptDiff={(diffId) => {
+                            const diff = acceptDiff(activeDocument.filePath, diffId)
+                            if (diff && activeDocument) {
+                                const activeGroup = editorGroups.find(g => g.id === activeGroupId)
+                                const activeTabId = activeGroup?.activeTabId
+                                if (!activeTabId) return
 
-                            let updatedBlocks = [...activeDocument.blocks]
+                                let updatedBlocks = [...activeDocument.blocks]
 
-                            if (diff.type === 'update' && diff.blockId && diff.newContent !== undefined) {
-                                const index = updatedBlocks.findIndex(b => b.block_id === diff.blockId)
-                                if (index !== -1) {
-                                    // Parse the new content into blocks
-                                    const parsedBlocks = parseContentToBlocks(diff.newContent)
-                                    if (parsedBlocks.length === 1) {
-                                        // Single block: just update content
-                                        updatedBlocks[index] = {
-                                            ...updatedBlocks[index],
-                                            content: parsedBlocks[0].content,
-                                            type: parsedBlocks[0].type
+                                if (diff.type === 'update' && diff.blockId && diff.newContent !== undefined) {
+                                    const index = updatedBlocks.findIndex(b => b.block_id === diff.blockId)
+                                    if (index !== -1) {
+                                        // Parse the new content into blocks
+                                        const parsedBlocks = parseContentToBlocks(diff.newContent)
+                                        if (parsedBlocks.length === 1) {
+                                            // Single block: just update content
+                                            updatedBlocks[index] = {
+                                                ...updatedBlocks[index],
+                                                content: parsedBlocks[0].content,
+                                                type: parsedBlocks[0].type
+                                            }
+                                        } else {
+                                            // Multiple blocks: replace the target block with parsed blocks
+                                            updatedBlocks.splice(index, 1, ...parsedBlocks)
                                         }
-                                    } else {
-                                        // Multiple blocks: replace the target block with parsed blocks
-                                        updatedBlocks.splice(index, 1, ...parsedBlocks)
                                     }
+                                } else if (diff.type === 'insert' && diff.blockId && diff.newContent !== undefined) {
+                                    const index = updatedBlocks.findIndex(b => b.block_id === diff.blockId)
+                                    if (index !== -1) {
+                                        // Parse the new content into blocks
+                                        const parsedBlocks = parseContentToBlocks(diff.newContent)
+                                        updatedBlocks.splice(index + 1, 0, ...parsedBlocks)
+                                    }
+                                } else if (diff.type === 'delete' && diff.blockId) {
+                                    updatedBlocks = updatedBlocks.filter(b => b.block_id !== diff.blockId)
                                 }
-                            } else if (diff.type === 'insert' && diff.blockId && diff.newContent !== undefined) {
-                                const index = updatedBlocks.findIndex(b => b.block_id === diff.blockId)
-                                if (index !== -1) {
-                                    // Parse the new content into blocks
-                                    const parsedBlocks = parseContentToBlocks(diff.newContent)
-                                    updatedBlocks.splice(index + 1, 0, ...parsedBlocks)
-                                }
-                            } else if (diff.type === 'delete' && diff.blockId) {
-                                updatedBlocks = updatedBlocks.filter(b => b.block_id !== diff.blockId)
-                            }
 
-                            updateDocument(activeTabId, updatedBlocks)
-                        }
-                    }}
-                    onRejectDiff={(diffId) => {
-                        rejectDiff(activeDocument.filePath, diffId)
-                    }}
-                    onApplyAll={() => {
-                        applyAllDiffs(pendingActions)
-                        clearDiffsForFile(activeDocument.filePath)
-                    }}
-                />
-            )}
+                                updateDocument(activeTabId, updatedBlocks)
+                            }
+                        }}
+                        onRejectDiff={(diffId) => {
+                            if (activeDocument) {
+                                rejectDiff(activeDocument.filePath, diffId)
+                            }
+                        }}
+                        onApplyAll={() => {
+                            if (activeDocument) {
+                                applyAllDiffs(pendingActions)
+                                clearDiffsForFile(activeDocument.filePath)
+                            }
+                        }}
+                    />
+                )
+            }
         </>
     )
 }

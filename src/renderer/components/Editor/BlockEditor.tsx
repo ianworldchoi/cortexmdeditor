@@ -15,6 +15,7 @@ import HighlightModal from './HighlightModal'
 import HighlightTooltip from './HighlightTooltip'
 import TextSelectionTooltip from './TextSelectionTooltip'
 import FileBlock from './FileBlock'
+import InlineDiff from './InlineDiff'
 import { useBlockHistory } from '../../hooks/useBlockHistory'
 import { useAIStore, type SelectedTextContext } from '../../stores/aiStore'
 
@@ -2295,133 +2296,178 @@ export default function BlockEditor({ document, tabId, viewMode }: BlockEditorPr
             </div>
 
             {/* Blocks */}
-            {blocks.map((block, index) => (
-                <BlockComponent
-                    key={block.block_id}
-                    block={block}
-                    index={index}
-                    isFocused={focusedBlockId === block.block_id}
-                    isSelected={selectedBlockIds.has(block.block_id)}
-                    onFocus={() => {
-                        setFocusedBlockId(block.block_id)
-                        if (selectedBlockIds.size > 0) setSelectedBlockIds(new Set())
-                    }}
-                    onBlur={() => setFocusedBlockId(null)}
-                    onChange={(value, alt) => {
-                        if (alt !== undefined) updateBlock(block.block_id, { alt })
-                        else handleBlockChange(block, value, index)
-                    }}
-                    onKeyDown={(e) => handleBlockKeyDown(e, block)}
-                    onTodoToggle={(checked) => handleTodoToggle(block.block_id, checked)}
-                    onToggleCollapse={(collapsed) => updateBlock(block.block_id, { collapsed })}
-                    onChildChange={(childIndex, content) => {
-                        if (block.children) {
-                            const newChildren = [...block.children]
-                            newChildren[childIndex] = { ...newChildren[childIndex], content }
-                            updateBlock(block.block_id, { children: newChildren })
-                        }
-                    }}
-                    onChildDelete={(childIndex) => {
-                        if (block.children) {
-                            const newChildren = block.children.filter((_, i) => i !== childIndex)
-                            updateBlock(block.block_id, { children: newChildren })
-                        }
-                    }}
-                    onChildAdd={() => {
-                        const newChild: Block = {
-                            block_id: crypto.randomUUID(),
-                            type: 'text',
-                            content: ''
-                        }
-                        const currentChildren = block.children || []
-                        updateBlock(block.block_id, { children: [...currentChildren, newChild] })
-                    }}
-                    isFirstBlock={index === 0}
-                    registerRef={(el) => {
-                        if (el) blockRefs.current.set(block.block_id, el)
-                        else blockRefs.current.delete(block.block_id)
-                    }}
-                    onContextMenu={(e) => {
-                        e.preventDefault()
-                        setBlockMenu({
-                            id: block.block_id,
-                            position: { x: e.clientX, y: e.clientY }
-                        })
-                    }}
-                    onHandleClick={(e) => {
-                        e.preventDefault()
-                        const rect = (e.target as HTMLElement).getBoundingClientRect()
-                        setBlockMenu({
-                            id: block.block_id,
-                            position: { x: rect.right + 10, y: rect.top }
-                        })
-                    }}
-                    viewMode={viewMode}
-                    onLinkClick={(target) => {
-                        // Find the file in vault docs
-                        const doc = documentIndex.find(d => d.title === target || d.path.endsWith(`/${target}.md`)) // Simple matching
-                        if (doc) {
-                            openTab(doc.path, doc.title)
-                        } else {
-                            // Link to non-existent file? Create it!
-                            if (vaultPath) {
-                                // Default to creating in root for now
-                                createNewFile(vaultPath, `${target}.md`).then((newPath) => {
-                                    if (newPath) {
-                                        openTab(newPath, target)
-                                    }
-                                })
-                            } else {
-                                console.warn('File not found and no vault path:', target)
-                            }
-                        }
-                    }}
-                    onBacklinkTrigger={(blockId, query, position) => {
-                        setBacklinkMenu({ blockId, query, position })
-                    }}
-                    onBacklinkQueryChange={(query) => {
-                        setBacklinkMenu(prev => prev ? { ...prev, query } : null)
-                    }}
-                    onBacklinkClose={() => {
-                        setBacklinkMenu(null)
-                    }}
-                    onTableDataChange={(data) => {
-                        updateBlock(block.block_id, { tableData: data })
-                    }}
-                    // Drag-and-drop props
-                    onDragStart={handleDragStart}
-                    onDragEnd={handleDragEnd}
-                    onDragOver={handleDragOver}
-                    onDrop={handleDrop}
-                    isDragOver={dropTargetId === block.block_id}
-                    dropPosition={dropTargetId === block.block_id ? dropPosition : null}
-                    isDragging={draggedBlockId === block.block_id || (!!draggedBlockId && selectedBlockIds.has(block.block_id))}
-                    onBlockSelect={handleBlockSelect}
-                    onHighlightHover={(e, blockId, text, comment) => {
-                        // Clear any pending hide timer
-                        if (highlightHoverTimer.current) {
-                            clearTimeout(highlightHoverTimer.current)
-                            highlightHoverTimer.current = null
-                        }
+            {blocks.map((block, index) => {
+                const diff = getDiffForBlock(document.filePath, block.block_id)
 
-                        const rect = (e.target as HTMLElement).getBoundingClientRect()
-                        setHighlightTooltip({
-                            visible: true,
-                            position: { x: rect.left, y: rect.bottom + 5 },
-                            text,
-                            comment,
-                            blockId
-                        })
-                    }}
-                    onHighlightLeave={() => {
-                        // Delay hiding to allow mouse to move to tooltip
-                        highlightHoverTimer.current = setTimeout(() => {
-                            setHighlightTooltip(null)
-                        }, 150)
-                    }}
-                    blocks={blocks}
-                />
-            ))}
+                // If there's a diff for this block, render with InlineDiff wrapper
+                if (diff) {
+                    return (
+                        <InlineDiff
+                            key={`diff-${block.block_id}`}
+                            diff={diff}
+                            block={block}
+                            blocks={blocks}
+                            onAccept={(diffId) => {
+                                const acceptedDiff = acceptDiff(document.filePath, diffId)
+                                if (acceptedDiff) {
+                                    // Apply the diff to the block
+                                    if (acceptedDiff.type === 'update' && acceptedDiff.newContent !== undefined) {
+                                        updateBlock(block.block_id, { content: acceptedDiff.newContent })
+                                    } else if (acceptedDiff.type === 'delete') {
+                                        deleteBlock(block.block_id)
+                                    } else if (acceptedDiff.type === 'insert' && acceptedDiff.newContent !== undefined) {
+                                        // Insert a new block after
+                                        const newBlock: Block = {
+                                            block_id: crypto.randomUUID(),
+                                            type: acceptedDiff.blockType || 'text',
+                                            content: acceptedDiff.newContent
+                                        }
+                                        const insertIndex = blocks.findIndex(b => b.block_id === block.block_id) + 1
+                                        const updatedBlocks = [...blocks]
+                                        updatedBlocks.splice(insertIndex, 0, newBlock)
+                                        updateDocument(tabId, updatedBlocks)
+                                    }
+                                }
+                            }}
+                            onReject={(diffId) => {
+                                rejectDiff(document.filePath, diffId)
+                            }}
+                            onLinkClick={(target) => {
+                                const doc = documentIndex.find(d => d.title === target || d.path.endsWith(`/${target}.md`))
+                                if (doc) openTab(doc.path, doc.title)
+                            }}
+                        />
+                    )
+                }
+
+                return (
+                    <BlockComponent
+                        key={block.block_id}
+                        block={block}
+                        index={index}
+                        isFocused={focusedBlockId === block.block_id}
+                        isSelected={selectedBlockIds.has(block.block_id)}
+                        onFocus={() => {
+                            setFocusedBlockId(block.block_id)
+                            if (selectedBlockIds.size > 0) setSelectedBlockIds(new Set())
+                        }}
+                        onBlur={() => setFocusedBlockId(null)}
+                        onChange={(value, alt) => {
+                            if (alt !== undefined) updateBlock(block.block_id, { alt })
+                            else handleBlockChange(block, value, index)
+                        }}
+                        onKeyDown={(e) => handleBlockKeyDown(e, block)}
+                        onTodoToggle={(checked) => handleTodoToggle(block.block_id, checked)}
+                        onToggleCollapse={(collapsed) => updateBlock(block.block_id, { collapsed })}
+                        onChildChange={(childIndex, content) => {
+                            if (block.children) {
+                                const newChildren = [...block.children]
+                                newChildren[childIndex] = { ...newChildren[childIndex], content }
+                                updateBlock(block.block_id, { children: newChildren })
+                            }
+                        }}
+                        onChildDelete={(childIndex) => {
+                            if (block.children) {
+                                const newChildren = block.children.filter((_, i) => i !== childIndex)
+                                updateBlock(block.block_id, { children: newChildren })
+                            }
+                        }}
+                        onChildAdd={() => {
+                            const newChild: Block = {
+                                block_id: crypto.randomUUID(),
+                                type: 'text',
+                                content: ''
+                            }
+                            const currentChildren = block.children || []
+                            updateBlock(block.block_id, { children: [...currentChildren, newChild] })
+                        }}
+                        isFirstBlock={index === 0}
+                        registerRef={(el) => {
+                            if (el) blockRefs.current.set(block.block_id, el)
+                            else blockRefs.current.delete(block.block_id)
+                        }}
+                        onContextMenu={(e) => {
+                            e.preventDefault()
+                            setBlockMenu({
+                                id: block.block_id,
+                                position: { x: e.clientX, y: e.clientY }
+                            })
+                        }}
+                        onHandleClick={(e) => {
+                            e.preventDefault()
+                            const rect = (e.target as HTMLElement).getBoundingClientRect()
+                            setBlockMenu({
+                                id: block.block_id,
+                                position: { x: rect.right + 10, y: rect.top }
+                            })
+                        }}
+                        viewMode={viewMode}
+                        onLinkClick={(target) => {
+                            // Find the file in vault docs
+                            const doc = documentIndex.find(d => d.title === target || d.path.endsWith(`/${target}.md`)) // Simple matching
+                            if (doc) {
+                                openTab(doc.path, doc.title)
+                            } else {
+                                // Link to non-existent file? Create it!
+                                if (vaultPath) {
+                                    // Default to creating in root for now
+                                    createNewFile(vaultPath, `${target}.md`).then((newPath) => {
+                                        if (newPath) {
+                                            openTab(newPath, target)
+                                        }
+                                    })
+                                } else {
+                                    console.warn('File not found and no vault path:', target)
+                                }
+                            }
+                        }}
+                        onBacklinkTrigger={(blockId, query, position) => {
+                            setBacklinkMenu({ blockId, query, position })
+                        }}
+                        onBacklinkQueryChange={(query) => {
+                            setBacklinkMenu(prev => prev ? { ...prev, query } : null)
+                        }}
+                        onBacklinkClose={() => {
+                            setBacklinkMenu(null)
+                        }}
+                        onTableDataChange={(data) => {
+                            updateBlock(block.block_id, { tableData: data })
+                        }}
+                        // Drag-and-drop props
+                        onDragStart={handleDragStart}
+                        onDragEnd={handleDragEnd}
+                        onDragOver={handleDragOver}
+                        onDrop={handleDrop}
+                        isDragOver={dropTargetId === block.block_id}
+                        dropPosition={dropTargetId === block.block_id ? dropPosition : null}
+                        isDragging={draggedBlockId === block.block_id || (!!draggedBlockId && selectedBlockIds.has(block.block_id))}
+                        onBlockSelect={handleBlockSelect}
+                        onHighlightHover={(e, blockId, text, comment) => {
+                            // Clear any pending hide timer
+                            if (highlightHoverTimer.current) {
+                                clearTimeout(highlightHoverTimer.current)
+                                highlightHoverTimer.current = null
+                            }
+
+                            const rect = (e.target as HTMLElement).getBoundingClientRect()
+                            setHighlightTooltip({
+                                visible: true,
+                                position: { x: rect.left, y: rect.bottom + 5 },
+                                text,
+                                comment,
+                                blockId
+                            })
+                        }}
+                        onHighlightLeave={() => {
+                            // Delay hiding to allow mouse to move to tooltip
+                            highlightHoverTimer.current = setTimeout(() => {
+                                setHighlightTooltip(null)
+                            }, 150)
+                        }}
+                        blocks={blocks}
+                    />
+                )
+            })}
 
             {/* Backlinks Section - rendered after all blocks */}
             <BacklinkSection currentNoteId={document.filePath} />

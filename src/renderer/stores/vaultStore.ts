@@ -32,7 +32,9 @@ interface VaultState {
 // 문서 인덱스 엔트리
 interface DocumentIndexEntry {
     path: string
-    title: string
+    filename: string
+    title: string // Display title (could be filename or frontmatter title depending on preference, but here we'll use filename-first logic)
+    frontmatterTitle?: string
     tags: string[]
     alwaysOn: boolean
 }
@@ -131,6 +133,7 @@ export const useVaultStore = create<VaultState>()(
 
                         if (frontmatterMatch) {
                             const fm = frontmatterMatch[1]
+                            const fileName = path.split('/').pop()?.replace('.md', '') || ''
 
                             // 간단한 YAML 파싱
                             const titleMatch = fm.match(/title:\s*(.+)/)
@@ -139,7 +142,9 @@ export const useVaultStore = create<VaultState>()(
 
                             indexEntries.push({
                                 path,
-                                title: titleMatch ? titleMatch[1].trim() : path.split('/').pop()?.replace('.md', '') || '',
+                                filename: fileName,
+                                title: fileName, // 파일명을 기본 제목으로 사용
+                                frontmatterTitle: titleMatch ? titleMatch[1].trim() : undefined,
                                 tags: tagsMatch
                                     ? tagsMatch[1].split(',').map(t => t.trim().replace(/['"]/g, '')).filter(Boolean)
                                     : [],
