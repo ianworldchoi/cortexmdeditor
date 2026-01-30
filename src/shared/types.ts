@@ -86,6 +86,7 @@ export interface PendingDiff {
     oldContent?: string // For update/delete
     newContent?: string // For update/insert
     blockType?: BlockType // For insert operations
+    insertIndex?: number // For ordering multiple insert diffs (0, 1, 2...)
     status: 'pending'
 }
 

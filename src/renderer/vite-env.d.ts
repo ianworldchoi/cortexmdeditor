@@ -32,6 +32,42 @@ interface WindowAPI {
     openPdfDialog: () => Promise<string | null>
     processYouTubeUrl: (apiKey: string, url: string) => Promise<{ strategy: string, url: string, fileUri?: string, mimeType?: string }>
     copyImageToVault: (sourcePath: string, vaultPath: string) => Promise<string>
+    // MCP Operations
+    mcpConnectServer: (config: {
+        id: string
+        name: string
+        type: 'stdio' | 'sse' | 'streamable-http'
+        command?: string
+        args?: string[]
+        env?: Record<string, string>
+        url?: string
+        headers?: Record<string, string>
+        enabled: boolean
+    }) => Promise<{ success: boolean; error?: string }>
+    mcpDisconnectServer: (serverId: string) => Promise<{ success: boolean }>
+    mcpGetTools: () => Promise<Array<{
+        name: string
+        description?: string
+        inputSchema: Record<string, unknown>
+        serverId: string
+    }>>
+    mcpCallTool: (serverId: string, toolName: string, args: Record<string, unknown>) => Promise<{
+        success: boolean
+        result?: unknown
+        error?: string
+    }>
+    mcpGetConnectedServers: () => Promise<Array<{ id: string; name: string; connected: boolean }>>
+    mcpLoadConfig: (workspacePath: string) => Promise<Array<{
+        id: string
+        name: string
+        type: 'stdio' | 'sse' | 'streamable-http'
+        command?: string
+        args?: string[]
+        env?: Record<string, string>
+        url?: string
+        headers?: Record<string, string>
+        enabled: boolean
+    }>>
 }
 
 interface Window {

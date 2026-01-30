@@ -21,11 +21,27 @@ export const convertActionsToDiffs = (
     actions: AIAction[],
     activeDoc: ActiveDocument | null
 ): PendingDiff[] => {
-    if (!activeDoc) return []
-
     return actions
-        .filter(a => a.type === 'update' || a.type === 'insert' || a.type === 'delete')
+        .filter(a => a.type === 'update' || a.type === 'insert' || a.type === 'delete' || a.type === 'update_file')
         .map(action => {
+            // For update_file, we don't have blocks yet (will be loaded later)
+            if (action.type === 'update_file') {
+                return {
+                    id: crypto.randomUUID(),
+                    blockId: 'file-update',
+                    type: 'update' as const,
+                    status: 'pending' as const,
+                    newContent: action.content,
+                    oldContent: undefined
+                }
+            }
+
+            // For other types, we need activeDoc
+            if (!activeDoc) {
+                console.warn('convertActionsToDiffs: activeDoc is null for non-file actions')
+                return null
+            }
+
             const diff: PendingDiff = {
                 id: crypto.randomUUID(),
                 blockId: action.id || action.afterId || '',
@@ -47,4 +63,5 @@ export const convertActionsToDiffs = (
 
             return diff
         })
+        .filter((diff): diff is PendingDiff => diff !== null)
 }

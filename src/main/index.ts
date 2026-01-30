@@ -14,6 +14,16 @@ import {
     copyImageToVault
 } from './services/fileService'
 import { pathToFileURL } from 'url'
+import {
+    connectServer as mcpConnectServer,
+    disconnectServer as mcpDisconnectServer,
+    getAllTools as mcpGetAllTools,
+    callTool as mcpCallTool,
+    getConnectedServers as mcpGetConnectedServers,
+    disconnectAll as mcpDisconnectAll,
+    loadMCPConfigFile as mcpLoadConfig,
+    type MCPServerConfig
+} from './services/mcpService'
 
 
 
@@ -41,8 +51,7 @@ function createWindow(): void {
         minHeight: 600,
         show: false,
         autoHideMenuBar: true,
-        titleBarStyle: 'hiddenInset',
-        trafficLightPosition: { x: 16, y: 16 },
+        titleBarStyle: 'hidden',
         vibrancy: 'under-window',
         visualEffectState: 'active',
         backgroundColor: '#00000000',
@@ -165,6 +174,32 @@ function setupIpcHandlers(): void {
     // Copy image to vault
     ipcMain.handle('image:copy-to-vault', async (_, sourcePath: string, vaultPath: string) => {
         return copyImageToVault(sourcePath, vaultPath)
+    })
+
+    // MCP Handlers
+    ipcMain.handle('mcp:connect-server', async (_, config: MCPServerConfig) => {
+        return mcpConnectServer(config)
+    })
+
+    ipcMain.handle('mcp:disconnect-server', async (_, serverId: string) => {
+        await mcpDisconnectServer(serverId)
+        return { success: true }
+    })
+
+    ipcMain.handle('mcp:get-tools', async () => {
+        return mcpGetAllTools()
+    })
+
+    ipcMain.handle('mcp:call-tool', async (_, serverId: string, toolName: string, args: Record<string, unknown>) => {
+        return mcpCallTool(serverId, toolName, args)
+    })
+
+    ipcMain.handle('mcp:get-connected-servers', async () => {
+        return mcpGetConnectedServers()
+    })
+
+    ipcMain.handle('mcp:load-config', async (_, workspacePath: string) => {
+        return mcpLoadConfig(workspacePath)
     })
 }
 

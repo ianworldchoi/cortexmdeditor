@@ -58,6 +58,51 @@ const api = {
     copyImageToVault: (sourcePath: string, vaultPath: string): Promise<string> =>
         ipcRenderer.invoke('image:copy-to-vault', sourcePath, vaultPath),
 
+    // MCP Operations
+    mcpConnectServer: (config: {
+        id: string
+        name: string
+        type: 'stdio' | 'sse' | 'streamable-http'
+        command?: string
+        args?: string[]
+        env?: Record<string, string>
+        url?: string
+        headers?: Record<string, string>
+        enabled: boolean
+    }): Promise<{ success: boolean; error?: string }> =>
+        ipcRenderer.invoke('mcp:connect-server', config),
+
+    mcpDisconnectServer: (serverId: string): Promise<{ success: boolean }> =>
+        ipcRenderer.invoke('mcp:disconnect-server', serverId),
+
+    mcpGetTools: (): Promise<Array<{
+        name: string
+        description?: string
+        inputSchema: Record<string, unknown>
+        serverId: string
+    }>> => ipcRenderer.invoke('mcp:get-tools'),
+
+    mcpCallTool: (serverId: string, toolName: string, args: Record<string, unknown>): Promise<{
+        success: boolean
+        result?: unknown
+        error?: string
+    }> => ipcRenderer.invoke('mcp:call-tool', serverId, toolName, args),
+
+    mcpGetConnectedServers: (): Promise<Array<{ id: string; name: string; connected: boolean }>> =>
+        ipcRenderer.invoke('mcp:get-connected-servers'),
+
+    mcpLoadConfig: (workspacePath: string): Promise<Array<{
+        id: string
+        name: string
+        type: 'stdio' | 'sse' | 'streamable-http'
+        command?: string
+        args?: string[]
+        env?: Record<string, string>
+        url?: string
+        headers?: Record<string, string>
+        enabled: boolean
+    }>> => ipcRenderer.invoke('mcp:load-config', workspacePath),
+
     // Zoom controls
     zoomIn: () => webFrame.setZoomLevel(webFrame.getZoomLevel() + 0.5),
     zoomOut: () => webFrame.setZoomLevel(webFrame.getZoomLevel() - 0.5),

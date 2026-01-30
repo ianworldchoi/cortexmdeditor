@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { PanelRight, ChevronsUpDown, PanelLeft } from 'lucide-react'
+import { PanelRight, ChevronsUpDown, PanelLeft, Sparkles } from 'lucide-react'
 import { useVaultStore } from './stores/vaultStore'
 import { useAIStore } from './stores/aiStore'
 import { useEditorStore } from './stores/editorStore'
@@ -95,46 +95,6 @@ export default function App() {
 
     return (
         <div className="app-container">
-            {/* Titlebar drag region */}
-            <div className="titlebar titlebar-drag-region">
-                <div className="titlebar-content">
-                    {/* Left Controls */}
-                    <button
-                        className={`titlebar-button ${!isSidebarCollapsed ? 'active' : ''}`}
-                        onClick={toggleSidebar}
-                        title={isSidebarCollapsed ? "Expand Sidebar (Cmd+\\)" : "Collapse Sidebar (Cmd+\\)"}
-                        style={{ marginRight: 'var(--space-2)' }}
-                    >
-                        <PanelLeft size={16} />
-                    </button>
-
-                    {/* Vault Selector Chip */}
-                    <button
-                        className="vault-chip"
-                        onClick={openVault}
-                        title="Switch Vault"
-                    >
-                        <span className="vault-chip-text">
-                            {vaultPath ? vaultPath.split('/').pop() : 'Vault'}
-                        </span>
-                        <ChevronsUpDown size={14} style={{ opacity: 0.8 }} />
-                    </button>
-
-                    <span className="titlebar-title">Cortex</span>
-                </div>
-
-                {/* Right controls */}
-                <div className="titlebar-right">
-                    <button
-                        className={`titlebar-button ${isPanelOpen ? 'active' : ''}`}
-                        onClick={togglePanel}
-                        title={isPanelOpen ? "Close AI Panel (Cmd+E)" : "Open AI Panel (Cmd+E)"}
-                    >
-                        <PanelRight size={16} />
-                    </button>
-                </div>
-            </div>
-
             <div className="main-layout">
                 {/* Left Sidebar */}
                 <Sidebar />
@@ -149,10 +109,21 @@ export default function App() {
                     ) : (
                         <WelcomeScreen />
                     )}
+
+                    {/* AI Floating Button */}
+                    {vaultPath && !isPanelOpen && (
+                        <button
+                            className="ai-floating-btn"
+                            onClick={togglePanel}
+                            title="Open AI Panel (Cmd+E)"
+                        >
+                            <Sparkles size={24} />
+                        </button>
+                    )}
                 </div>
 
                 {/* AI Panel */}
-                <AIPanel />
+                {isPanelOpen && <AIPanel />}
             </div>
         </div>
     )

@@ -7,12 +7,14 @@ import { useEditorStore, parseContentToBlocks } from '../../stores/editorStore'
 import { sendMessage } from '../../services/geminiService'
 import SettingsModal from '../Settings/SettingsModal'
 import MentionDropdown, { type MentionedItem } from './MentionDropdown'
-import type { Block, BlockType, PendingDiff } from '@shared/types'
+import type { Block, BlockType, PendingDiff, Document } from '@shared/types'
 import { useDiffStore } from '../../stores/diffStore'
 import ReviewChangesModal from './ReviewChangesModal'
 import Button from '../common/Button'
 import { convertActionsToDiffs } from './diffHelpers'
 import AIMarkdown from './AIMarkdown'
+import CompactDiffCard from './CompactDiffCard'
+import { useMultiFileDiff } from './useMultiFileDiff'
 
 const MODEL_OPTIONS: { value: AIModel; label: string; icon: React.ReactNode }[] = [
     { value: 'gemini-3-flash-preview', label: 'Flash', icon: <Zap size={12} /> },
@@ -53,8 +55,10 @@ export default function AIPanel() {
     } = useAIStore()
     const { getActiveDocument, editorGroups, activeGroupId, updateDocument, updateDocumentMeta } = useEditorStore()
     const { refreshTree, vaultPath } = useVaultStore()
-    const { addDiffs, getDiffsForFile, acceptDiff, rejectDiff, clearDiffsForFile } = useDiffStore()
+    const { addDiffs, getDiffsForFile, acceptDiff, rejectDiff, clearDiffsForFile, getAllFileSummaries } = useDiffStore()
 
+    // Multi-file diff handlers (memoized to prevent infinite loops)
+    const { handleFileClick, handleApplyFile, handleRejectFile, handleApplyAll, handleRejectAll } = useMultiFileDiff()
 
     // Get active document for use throughout the component
     const activeDocument = getActiveDocument()
@@ -770,175 +774,408 @@ export default function AIPanel() {
             // Handle Batch AI Action Blocks
             if (language === 'json:batch-action') {
                 let actions: AIAction[] = []
+                let parseError: string | null = null
                 try {
-                    const sanitizedCode = code.replace(/^```json\s+/, '').trim()
-                    const parsed = JSON.parse(sanitizedCode)
-                    if (Array.isArray(parsed)) {
-                        actions = parsed
-                    } else {
-                        // Handle legacy single object case just in case
-                        actions = [parsed]
+                    let sanitizedCode = code.replace(/^```json\s+/, '').trim()
+
+                    // Multiple attempts to parse with different fixes
+                    let parseAttempts = 0
+                    let lastError: any = null
+
+                    while (parseAttempts < 4) {
+                        try {
+                            const parsed = JSON.parse(sanitizedCode)
+                            if (Array.isArray(parsed)) {
+                                actions = parsed
+                            } else {
+                                actions = [parsed]
+                            }
+                            break // Success!
+                        } catch (error) {
+                            lastError = error
+                            parseAttempts++
+
+                            if (parseAttempts === 1) {
+                                // Attempt 1: Fix escape sequences
+                                sanitizedCode = sanitizedCode.replace(/\\([^"\\\/bfnrtu])/g, '\\\\$1')
+                            } else if (parseAttempts === 2) {
+                                // Attempt 2: Fix unescaped quotes inside content strings
+                                // Match "content": "..." and escape inner quotes
+                                sanitizedCode = code.replace(/^```json\s+/, '').trim()
+                                sanitizedCode = sanitizedCode.replace(
+                                    /"content":\s*"([\s\S]*?)"\s*\n\s*\}/g,
+                                    (match, content) => {
+                                        // Escape unescaped quotes within content
+                                        const escaped = content
+                                            .replace(/(?<!\\)"/g, '\\"')
+                                            .replace(/\n/g, '\\n')
+                                        return `"content": "${escaped}"\n  }`
+                                    }
+                                )
+                            } else if (parseAttempts === 3) {
+                                // Attempt 3: Try to close incomplete strings
+                                const lines = sanitizedCode.split('\n')
+                                let fixed = ''
+                                let inContent = false
+
+                                for (let i = 0; i < lines.length; i++) {
+                                    const line = lines[i]
+                                    if (line.includes('"content":')) {
+                                        inContent = true
+                                    }
+                                    fixed += line + '\n'
+
+                                    // If we're at the end and content is not closed
+                                    if (i === lines.length - 1 && inContent && !line.includes('}')) {
+                                        fixed += '"\n  }\n]'
+                                    }
+                                }
+                                sanitizedCode = fixed
+                            } else {
+                                // Give up after 4 attempts
+                                throw lastError
+                            }
+                        }
                     }
                 } catch (e) {
-                    console.error('Failed to parse AI batch action', e)
+                    console.warn('Failed to parse AI batch action, showing as raw markdown:', e)
+                    parseError = String(e)
                 }
 
                 if (actions.length > 0) {
-                    parts.push(
-                        <div key={match.index} className="ai-action-card">
-                            <div className="ai-action-header">
-                                <span>Suggested Changes ({actions.length})</span>
+                    // Group actions by file path to count unique files
+                    const fileActionGroups = new Map<string, AIAction[]>()
+
+                    for (const action of actions) {
+                        if ((action.type === 'update_file' || action.type === 'create_file') && action.path) {
+                            if (!fileActionGroups.has(action.path)) {
+                                fileActionGroups.set(action.path, [])
+                            }
+                            fileActionGroups.get(action.path)!.push(action)
+                        }
+                    }
+
+                    // Check if this is a multi-file update scenario (2+ unique files)
+                    const isMultiFileUpdate = fileActionGroups.size >= 2
+
+                    // If 2+ files, use CompactDiffCard
+                    if (isMultiFileUpdate) {
+                        const fileSummaries: { filePath: string; fileName: string; deletions: number; additions: number; status: 'modified' | 'created' | 'deleted' | 'error' }[] = []
+
+                        for (const [path, fileActions] of fileActionGroups.entries()) {
+                            const fileName = path.split('/').pop() || path
+                            const hasCreate = fileActions.some(a => a.type === 'create_file')
+
+                            fileSummaries.push({
+                                filePath: path,
+                                fileName,
+                                deletions: 0,
+                                additions: 1,
+                                status: hasCreate ? 'created' : 'modified'
+                            })
+                        }
+
+                        // Handler to apply multi-file actions
+                        const handleApplyMultiFile = () => {
+                            for (const action of actions) {
+                                if ((action.type === 'update_file' || action.type === 'create_file') && action.path && action.content !== undefined) {
+                                    const fullPath = action.path.startsWith('/') ? action.path : `${vaultPath}/${action.path}`
+                                    window.api.createFile(fullPath, action.content)
+                                        .then(() => {
+                                            console.log(`Applied file: ${fullPath}`)
+                                            refreshTree()
+                                        })
+                                        .catch((err: any) => console.error(`Failed to apply file: ${fullPath}`, err))
+                                }
+                            }
+                        }
+
+                        // Custom file click handler that opens file and stores block-level diffs
+                        const handleMultiFileClick = async (filePath: string) => {
+                            const action = actions.find(a => a.path === filePath)
+                            const fullPath = filePath.startsWith('/') ? filePath : `${vaultPath}/${filePath}`
+
+                            // Open the file first
+                            await handleFileClick(filePath)
+
+                            // If we have new content, parse it and create block-level diffs
+                            if (action && action.content !== undefined) {
+                                // Wait a bit for the file to load in editor
+                                setTimeout(() => {
+                                    const { editorGroups } = useEditorStore.getState()
+                                    // Find the tab with this file
+                                    let currentDoc: Document | null = null
+                                    for (const group of editorGroups) {
+                                        const tab = group.tabs.find(t => t.filePath === fullPath)
+                                        if (tab?.document) {
+                                            currentDoc = tab.document
+                                            break
+                                        }
+                                    }
+
+                                    if (currentDoc && currentDoc.blocks.length > 0) {
+                                        // Parse new content to blocks
+                                        const newBlocks = parseContentToBlocks(action.content!)
+                                        const diffs: PendingDiff[] = []
+
+                                        // Create proper block-level diffs by comparing
+                                        const oldBlocks = currentDoc.blocks
+                                        const maxLen = Math.max(oldBlocks.length, newBlocks.length)
+
+                                        for (let i = 0; i < maxLen; i++) {
+                                            const oldBlock = oldBlocks[i]
+                                            const newBlock = newBlocks[i]
+
+                                            if (oldBlock && newBlock) {
+                                                // Both exist - create update diff if content differs
+                                                if (oldBlock.content !== newBlock.content) {
+                                                    diffs.push({
+                                                        id: crypto.randomUUID(),
+                                                        blockId: oldBlock.block_id,
+                                                        type: 'update',
+                                                        status: 'pending',
+                                                        oldContent: oldBlock.content,
+                                                        newContent: newBlock.content
+                                                    })
+                                                }
+                                            } else if (!oldBlock && newBlock) {
+                                                // New block - create insert diff
+                                                // Insert after the last old block, with insertIndex for ordering
+                                                const afterBlockId = oldBlocks[oldBlocks.length - 1]?.block_id || '__document_start__'
+                                                diffs.push({
+                                                    id: crypto.randomUUID(),
+                                                    blockId: afterBlockId,
+                                                    type: 'insert',
+                                                    status: 'pending',
+                                                    newContent: newBlock.content,
+                                                    blockType: newBlock.type,
+                                                    insertIndex: i - oldBlocks.length // 0, 1, 2... for ordering multiple inserts
+                                                })
+                                            } else if (oldBlock && !newBlock) {
+                                                // Old block deleted
+                                                diffs.push({
+                                                    id: crypto.randomUUID(),
+                                                    blockId: oldBlock.block_id,
+                                                    type: 'delete',
+                                                    status: 'pending',
+                                                    oldContent: oldBlock.content
+                                                })
+                                            }
+                                        }
+
+                                        if (diffs.length > 0) {
+                                            addDiffs(fullPath, diffs)
+                                        }
+                                    }
+                                }, 500) // Wait for document to load
+                            }
+                        }
+
+                        parts.push(
+                            <div key={match.index} className="ai-action-card">
+                                <CompactDiffCard
+                                    fileSummaries={fileSummaries}
+                                    onFileClick={handleMultiFileClick}
+                                    onApplyFile={(filePath) => {
+                                        const action = actions.find(a => a.path === filePath)
+                                        if (action && action.content !== undefined) {
+                                            const fullPath = filePath.startsWith('/') ? filePath : `${vaultPath}/${filePath}`
+                                            window.api.createFile(fullPath, action.content)
+                                                .then(() => {
+                                                    console.log(`Applied file: ${fullPath}`)
+                                                    clearDiffsForFile(fullPath) // Clear diff after applying
+                                                    refreshTree()
+                                                })
+                                                .catch((err: any) => console.error(`Failed to apply file: ${fullPath}`, err))
+                                        }
+                                    }}
+                                    onRejectFile={(filePath) => {
+                                        const fullPath = filePath.startsWith('/') ? filePath : `${vaultPath}/${filePath}`
+                                        clearDiffsForFile(fullPath)
+                                    }}
+                                    onApplyAll={handleApplyMultiFile}
+                                    onRejectAll={() => {
+                                        // Clear all diffs for these files
+                                        for (const summary of fileSummaries) {
+                                            const fullPath = summary.filePath.startsWith('/') ? summary.filePath : `${vaultPath}/${summary.filePath}`
+                                            clearDiffsForFile(fullPath)
+                                        }
+                                    }}
+                                    isApplied={hasSnapshot(messageId)}
+                                    onUndo={hasSnapshot(messageId) ? () => handleUndo(messageId) : undefined}
+                                />
                             </div>
-                            <div className="ai-action-content">
-                                {actions.map((action, i) => {
-                                    // Handle File/Folder Creation
-                                    if (action.type === 'create_file' || action.type === 'create_folder') {
+                        )
+                    } else {
+                        // Single-document edit scenario - use verbose display
+                        parts.push(
+                            <div key={match.index} className="ai-action-card">
+                                <div className="ai-action-header">
+                                    <span>Suggested Changes ({actions.length})</span>
+                                </div>
+                                <div className="ai-action-content">
+                                    {actions.map((action, i) => {
+                                        // Handle File/Folder Creation
+                                        if (action.type === 'create_file' || action.type === 'create_folder') {
+                                            return (
+                                                <div key={i} className={`ai-diff-item ${action.type}`}>
+                                                    <div className="ai-diff-header">
+                                                        {action.type === 'create_file' ? <File size={12} /> : <Folder size={12} />}
+                                                        <span className="ai-diff-type">{action.type.replace('_', ' ').toUpperCase()}</span>
+                                                    </div>
+                                                    <div className="ai-diff-body">
+                                                        <div className="ai-diff-new" style={{ fontWeight: 600 }}>{action.path}</div>
+                                                        {action.type === 'create_file' && (
+                                                            <div className="ai-diff-new" style={{ fontSize: '10px', opacity: 0.8 }}>
+                                                                {action.content?.slice(0, 100)}
+                                                                {(action.content?.length || 0) > 100 ? '...' : ''}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            )
+                                        }
+
+                                        // Handle Metadata Updates
+                                        if (action.type === 'update_meta') {
+                                            return (
+                                                <div key={i} className="ai-diff-item update_meta">
+                                                    <div className="ai-diff-header">
+                                                        <Settings size={12} />
+                                                        <span className="ai-diff-type">UPDATE META</span>
+                                                    </div>
+                                                    <div className="ai-diff-body">
+                                                        <div className="ai-diff-new">
+                                                            <strong>{action.metaField}</strong>: {JSON.stringify(action.metaValue)}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            )
+                                        }
+
+                                        // Handle File Updates (modify existing files by path)
+                                        if (action.type === 'update_file') {
+                                            return (
+                                                <div key={i} className="ai-diff-item update_file">
+                                                    <div className="ai-diff-header">
+                                                        <Edit3 size={12} />
+                                                        <span className="ai-diff-type">UPDATE FILE</span>
+                                                    </div>
+                                                    <div className="ai-diff-body">
+                                                        <div className="ai-diff-new" style={{ fontWeight: 600 }}>{action.path}</div>
+                                                        <div className="ai-diff-new" style={{ fontSize: '10px', opacity: 0.8, maxHeight: 80, overflow: 'hidden' }}>
+                                                            {action.content?.slice(0, 200)}
+                                                            {(action.content?.length || 0) > 200 ? '...' : ''}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            )
+                                        }
+
+                                        // Handle Document Edits (Update, Insert, Delete)
+                                        const oldBlock = activeDocument?.blocks.find(b => b.block_id === action.id)
+
                                         return (
                                             <div key={i} className={`ai-diff-item ${action.type}`}>
                                                 <div className="ai-diff-header">
-                                                    {action.type === 'create_file' ? <File size={12} /> : <Folder size={12} />}
-                                                    <span className="ai-diff-type">{action.type.replace('_', ' ').toUpperCase()}</span>
+                                                    {action.type === 'update' && <Edit3 size={12} />}
+                                                    {action.type === 'insert' && <Plus size={12} />}
+                                                    {action.type === 'delete' && <Trash2 size={12} />}
+                                                    <span className="ai-diff-type">{action.type.toUpperCase()}</span>
+                                                    {action.type === 'update' && <span className="ai-diff-id">ID: {action.id?.slice(0, 8)}...</span>}
                                                 </div>
-                                                <div className="ai-diff-body">
-                                                    <div className="ai-diff-new" style={{ fontWeight: 600 }}>{action.path}</div>
-                                                    {action.type === 'create_file' && (
-                                                        <div className="ai-diff-new" style={{ fontSize: '10px', opacity: 0.8 }}>
-                                                            {action.content?.slice(0, 100)}
-                                                            {(action.content?.length || 0) > 100 ? '...' : ''}
+
+                                                {action.type === 'update' && (
+                                                    <div className="ai-diff-body">
+                                                        {oldBlock && (
+                                                            <div className="ai-diff-old">
+                                                                {oldBlock.content.length > 50 ? oldBlock.content.slice(0, 50) + '...' : oldBlock.content}
+                                                            </div>
+                                                        )}
+
+                                                        <div className="ai-diff-new">{action.content}</div>
+                                                    </div>
+                                                )}
+
+                                                {action.type === 'insert' && (
+                                                    <div className="ai-diff-body">
+                                                        <div className="ai-diff-new">{action.content}</div>
+                                                    </div>
+                                                )}
+
+                                                {action.type === 'delete' && oldBlock && (
+                                                    <div className="ai-diff-body">
+                                                        <div className="ai-diff-old" style={{ textDecoration: 'line-through' }}>
+                                                            {oldBlock.content}
                                                         </div>
-                                                    )}
-                                                </div>
+                                                    </div>
+                                                )}
                                             </div>
                                         )
-                                    }
+                                    })}
+                                </div>
+                                <div className="ai-action-footer">
+                                    {hasSnapshot(messageId) ? (
+                                        <button
+                                            className="ai-action-undo-btn"
+                                            onClick={() => handleUndo(messageId)}
+                                        >
+                                            ↩ Undo Changes
+                                        </button>
+                                    ) : (
+                                        <div className="ai-action-group">
+                                            <Button
+                                                variant="default"
+                                                onClick={() => {
+                                                    const diffsToReview = convertActionsToDiffs(actions, activeDocument)
+                                                    console.log('Review Changes clicked - adding inline diffs', { actions, diffsToReview })
 
-                                    // Handle Metadata Updates
-                                    if (action.type === 'update_meta') {
-                                        return (
-                                            <div key={i} className="ai-diff-item update_meta">
-                                                <div className="ai-diff-header">
-                                                    <Settings size={12} />
-                                                    <span className="ai-diff-type">UPDATE META</span>
-                                                </div>
-                                                <div className="ai-diff-body">
-                                                    <div className="ai-diff-new">
-                                                        <strong>{action.metaField}</strong>: {JSON.stringify(action.metaValue)}
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        )
-                                    }
-
-                                    // Handle File Updates (modify existing files by path)
-                                    if (action.type === 'update_file') {
-                                        return (
-                                            <div key={i} className="ai-diff-item update_file">
-                                                <div className="ai-diff-header">
-                                                    <Edit3 size={12} />
-                                                    <span className="ai-diff-type">UPDATE FILE</span>
-                                                </div>
-                                                <div className="ai-diff-body">
-                                                    <div className="ai-diff-new" style={{ fontWeight: 600 }}>{action.path}</div>
-                                                    <div className="ai-diff-new" style={{ fontSize: '10px', opacity: 0.8, maxHeight: 80, overflow: 'hidden' }}>
-                                                        {action.content?.slice(0, 200)}
-                                                        {(action.content?.length || 0) > 200 ? '...' : ''}
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        )
-                                    }
-
-                                    // Handle Document Edits (Update, Insert, Delete)
-                                    const oldBlock = activeDocument?.blocks.find(b => b.block_id === action.id)
-
-                                    return (
-                                        <div key={i} className={`ai-diff-item ${action.type}`}>
-                                            <div className="ai-diff-header">
-                                                {action.type === 'update' && <Edit3 size={12} />}
-                                                {action.type === 'insert' && <Plus size={12} />}
-                                                {action.type === 'delete' && <Trash2 size={12} />}
-                                                <span className="ai-diff-type">{action.type.toUpperCase()}</span>
-                                                {action.type === 'update' && <span className="ai-diff-id">ID: {action.id?.slice(0, 8)}...</span>}
-                                            </div>
-
-                                            {action.type === 'update' && (
-                                                <div className="ai-diff-body">
-                                                    {oldBlock && (
-                                                        <div className="ai-diff-old">
-                                                            {oldBlock.content.length > 50 ? oldBlock.content.slice(0, 50) + '...' : oldBlock.content}
-                                                        </div>
-                                                    )}
-
-                                                    <div className="ai-diff-new">{action.content}</div>
-                                                </div>
-                                            )}
-
-                                            {action.type === 'insert' && (
-                                                <div className="ai-diff-body">
-                                                    <div className="ai-diff-new">{action.content}</div>
-                                                </div>
-                                            )}
-
-                                            {action.type === 'delete' && oldBlock && (
-                                                <div className="ai-diff-body">
-                                                    <div className="ai-diff-old" style={{ textDecoration: 'line-through' }}>
-                                                        {oldBlock.content}
-                                                    </div>
-                                                </div>
-                                            )}
+                                                    if (activeDocument) {
+                                                        // Add diffs to store - editor will render inline
+                                                        addDiffs(activeDocument.filePath, diffsToReview)
+                                                    }
+                                                    // No modal - diffs will be shown inline in editor
+                                                }}
+                                                style={{ flex: 1 }}
+                                            >
+                                                Review Changes
+                                            </Button>
+                                            <Button
+                                                variant="primary"
+                                                onClick={() => {
+                                                    applyAllDiffs(actions)
+                                                    // Clear any pending diffs for this file to prevent duplicates
+                                                    if (activeDocument) {
+                                                        clearDiffsForFile(activeDocument.filePath)
+                                                    }
+                                                    dispatchBatchActions(actions, messageId, true) // skipDiffStore=true for Apply All
+                                                }}
+                                                style={{ flex: 1 }}
+                                            >
+                                                <Check size={12} /> Apply All
+                                            </Button>
                                         </div>
-                                    )
-                                })}
-                            </div>
-                            <div className="ai-action-footer">
-                                {hasSnapshot(messageId) ? (
-                                    <button
-                                        className="ai-action-undo-btn"
-                                        onClick={() => handleUndo(messageId)}
-                                    >
-                                        ↩ Undo Changes
-                                    </button>
-                                ) : (
-                                    <div className="ai-action-group">
-                                        <Button
-                                            variant="default"
-                                            onClick={() => {
-                                                const diffsToReview = convertActionsToDiffs(actions, activeDocument)
-                                                console.log('Review Changes clicked - adding inline diffs', { actions, diffsToReview })
-
-                                                if (activeDocument) {
-                                                    // Add diffs to store - editor will render inline
-                                                    addDiffs(activeDocument.filePath, diffsToReview)
-                                                }
-                                                // No modal - diffs will be shown inline in editor
-                                            }}
-                                            style={{ flex: 1 }}
-                                        >
-                                            Review Changes
-                                        </Button>
-                                        <Button
-                                            variant="primary"
-                                            onClick={() => {
-                                                applyAllDiffs(actions)
-                                                // Clear any pending diffs for this file to prevent duplicates
-                                                if (activeDocument) {
-                                                    clearDiffsForFile(activeDocument.filePath)
-                                                }
-                                                dispatchBatchActions(actions, messageId, true) // skipDiffStore=true for Apply All
-                                            }}
-                                            style={{ flex: 1 }}
-                                        >
-                                            <Check size={12} /> Apply All
-                                        </Button>
-                                    </div>
-                                )}
-                            </div>
-                        </div >
-                    )
+                                    )}
+                                </div>
+                            </div >
+                        )
+                    } // End of if/else for hasMultiFileUpdates
                 } else {
+                    // Parse failed - show raw JSON as copyable code block
                     parts.push(
-                        <div key={match.index} className="code-block-wrapper error">
-                            Invalid Batch JSON
+                        <div key={match.index} className="code-block-wrapper">
+                            <div className="code-block-header">
+                                <span style={{ color: 'var(--color-warning)' }}>⚠️ JSON Parse Error</span>
+                                <button
+                                    className="code-copy-btn"
+                                    onClick={() => navigator.clipboard.writeText(code)}
+                                >
+                                    Copy Raw
+                                </button>
+                            </div>
+                            <pre className="code-block-content" style={{ maxHeight: 200, overflow: 'auto' }}>
+                                <code>{code}</code>
+                            </pre>
                         </div>
                     )
                 }

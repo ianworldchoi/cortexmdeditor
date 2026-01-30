@@ -5,3 +5,7 @@ dist/
 .env
 .vscode/
 ref.png
+
+# Sensitive files
+mcp.json
+src/test-mcp.ts

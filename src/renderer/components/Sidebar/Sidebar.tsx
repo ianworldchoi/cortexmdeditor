@@ -3,6 +3,7 @@ import {
     RefreshCw,
     ListChevronsDownUp,
     PanelLeft,
+    ChevronsUpDown,
     Folder,
     FilePlus,
     FolderPlus,
@@ -40,6 +41,32 @@ export default function Sidebar() {
             ) : (
                 // Expanded Content
                 <>
+                    {/* New Header Area */}
+                    <div className="sidebar-header sidebar-drag-region">
+                        <div className="sidebar-header-left">
+                            <div className="traffic-lights-spacer" />
+                            <button
+                                className="sidebar-btn"
+                                onClick={toggleSidebar}
+                                title="Collapse Sidebar (Cmd+\)"
+                            >
+                                <PanelLeft size={16} />
+                            </button>
+                        </div>
+
+                        {/* Vault Selector Chip moved from Titlebar */}
+                        <button
+                            className="vault-chip"
+                            onClick={openVault}
+                            title="Switch Vault"
+                        >
+                            <span className="vault-chip-text">
+                                {vaultPath ? vaultPath.split('/').pop() : 'Vault'}
+                            </span>
+                            <ChevronsUpDown size={14} style={{ opacity: 0.8 }} />
+                        </button>
+                    </div>
+
                     {/* Bottom Section: File Actions */}
                     <div className="sidebar-header-actions" style={{
                         padding: 'var(--space-2) var(--space-3)',

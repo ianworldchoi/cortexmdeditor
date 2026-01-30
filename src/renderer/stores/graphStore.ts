@@ -313,7 +313,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             const parsedDocs = new Map<string, ParsedDoc>()
 
             fileContents.forEach(({ path, content }) => {
-                const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/)
+                const frontmatterMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/)
                 const fileName = path.split('/').pop()?.replace('.md', '') || 'Untitled'
 
                 // Primary Title is now Filename

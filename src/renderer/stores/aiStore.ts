@@ -34,6 +34,18 @@ export interface SelectedTextContext {
     filePath: string
 }
 
+export interface MCPServerConfig {
+    id: string
+    name: string
+    type: 'stdio' | 'sse' | 'streamable-http'
+    command?: string
+    args?: string[]
+    env?: Record<string, string>
+    url?: string
+    headers?: Record<string, string>
+    enabled: boolean
+}
+
 interface AIState {
     isPanelOpen: boolean
     panelWidth: number
@@ -47,6 +59,7 @@ interface AIState {
     selectedModel: AIModel
     webSearchEnabled: boolean
     selectedTextContext: SelectedTextContext | null
+    mcpServers: MCPServerConfig[]
 
     // Actions
     togglePanel: () => void
@@ -80,6 +93,13 @@ interface AIState {
     deleteFolderPrompt: (folderPath: string) => void
     getFolderPromptForPath: (filePath: string) => string | null
     clearSelectedTextContext: () => void
+
+    // MCP Servers
+    addMCPServer: (server: MCPServerConfig) => void
+    removeMCPServer: (serverId: string) => void
+    updateMCPServer: (serverId: string, updates: Partial<MCPServerConfig>) => void
+    toggleMCPServer: (serverId: string) => void
+    setMCPServers: (servers: MCPServerConfig[]) => void
 }
 
 const DEFAULT_SYSTEM_PROMPT = `You are an AI assistant integrated into Cortex, a local-first Markdown note-taking app.
@@ -88,15 +108,38 @@ const DEFAULT_SYSTEM_PROMPT = `You are an AI assistant integrated into Cortex, a
 
 You have REAL power to interact with the user's vault:
 ✅ **Create new files** - You CAN create new markdown files anywhere in the vault
-✅ **Create new folders** - You CAN create new folders to organize content  
+✅ **Create new folders** - You CAN create new folders to organize content
 ✅ **Edit documents** - You CAN modify blocks in the active document
 ✅ **Update ANY file** - You CAN modify any file in the vault by path (even if not open!)
 ✅ **Delete content** - You CAN remove blocks from the active document
 ✅ **Analyze YouTube Videos** - You CAN directly watch and analyze YouTube videos if a URL is provided.
+✅ **Browse the filesystem** - You have MCP filesystem tools to explore folders and read files!
 
+### MCP Filesystem Tools Available
+
+You have access to powerful filesystem tools via MCP (Model Context Protocol):
+
+- **\`read_file\`** - Read the contents of any file in the vault
+- **\`read_multiple_files\`** - Read multiple files at once (efficient for batch operations)
+- **\`write_file\`** - Write or update file contents
+- **\`list_directory\`** - List all files and folders in a directory
+- **\`search_files\`** - Search for files by name or pattern
+- **\`get_file_info\`** - Get metadata about a file (size, modified time, etc.)
+
+**Example workflows:**
+1. User: "Update all files in the Daily folder to add #reviewed tag"
+   → Use \`list_directory\` to find all files in Daily/
+   → Use \`read_multiple_files\` to get their contents
+   → Generate \`update_file\` actions for each
+
+2. User: "Find all notes about project X and summarize them"
+   → Use \`search_files\` with pattern
+   → Use \`read_multiple_files\` to get contents
+   → Provide summary
 
 ⚠️ **CRITICAL**: Creating/updating files works even if that file is NOT currently open!
 When the user asks to modify specific files (mentioned with @), USE YOUR POWER - don't tell them to open the file first.
+When users ask about "all files in X folder" or similar, USE MCP TOOLS to explore and read them!
 
 ---
 
@@ -177,7 +220,52 @@ type AIAction =
 3. For edits, use **[Block ID: ...]** from the context.
 4. For file paths, use relative paths from vault root.
 5. **DO NOT tell users "I can't modify files" - YOU CAN with update_file!**
-6. When user mentions files/folders with @, you have their full content in context.`
+6. When user mentions files/folders with @, you have their full content in context.
+
+## JSON Generation Guidelines (CRITICAL!)
+
+**To prevent parsing errors, follow these rules strictly:**
+
+1. **Escape special characters in strings**:
+   - Newlines: Use \`\\n\` not actual newlines
+   - Quotes: Use \`\\"\` for double quotes inside strings
+   - Backslashes: Use \`\\\\\` for literal backslashes
+   - Tabs: Use \`\\t\` for tabs
+
+2. **Keep content fields manageable**:
+   - For long content (>500 chars), split into multiple smaller blocks
+   - Don't put entire document contents in a single action
+   - Break large updates into multiple \`update\` or \`insert\` actions
+
+3. **File paths with special characters**:
+   - Korean/unicode filenames are OK, but escape quotes if in path
+   - Example: \`"path": "Daily/안녕하세요.md"\` ✅
+   - Example: \`"path": "Daily/"quoted".md"\` should be \`"Daily/\\"quoted\\".md"\` ✅
+
+4. **Validate before output**:
+   - Ensure all JSON objects have closing braces \`}\`
+   - Ensure array has closing bracket \`]\`
+   - No trailing commas after last item
+   - All strings properly closed with matching quotes
+
+5. **If content is too long**:
+   - Instead of one massive \`update_file\` action with full content
+   - Use multiple \`update\` actions on specific blocks
+   - Or inform user the content is too large and ask to split the task
+
+**Example - DON'T do this (too long):**
+\`\`\`json
+[{"type": "update_file", "path": "file.md", "content": "...5000 characters of content..."}]
+\`\`\`
+
+**Example - DO this instead (split into blocks):**
+\`\`\`json
+[
+  {"type": "update", "id": "block-1", "content": "First part..."},
+  {"type": "update", "id": "block-2", "content": "Second part..."},
+  {"type": "insert", "afterId": "block-2", "content": "New content...", "blockType": "paragraph"}
+]
+\`\`\``
 
 
 export const useAIStore = create<AIState>()(
@@ -195,6 +283,7 @@ export const useAIStore = create<AIState>()(
             selectedModel: 'gemini-3-pro-preview',
             webSearchEnabled: false,
             selectedTextContext: null,
+            mcpServers: [],
 
             togglePanel: () => set((state) => ({ isPanelOpen: !state.isPanelOpen })),
             openPanel: () => set({ isPanelOpen: true }),
@@ -384,7 +473,30 @@ export const useAIStore = create<AIState>()(
                 }
                 return null
             },
-            clearSelectedTextContext: () => set({ selectedTextContext: null })
+            clearSelectedTextContext: () => set({ selectedTextContext: null }),
+
+            // MCP Servers
+            addMCPServer: (server) => set(state => ({
+                mcpServers: [...state.mcpServers, server]
+            })),
+
+            removeMCPServer: (serverId) => set(state => ({
+                mcpServers: state.mcpServers.filter(s => s.id !== serverId)
+            })),
+
+            updateMCPServer: (serverId, updates) => set(state => ({
+                mcpServers: state.mcpServers.map(s =>
+                    s.id === serverId ? { ...s, ...updates } : s
+                )
+            })),
+
+            toggleMCPServer: (serverId) => set(state => ({
+                mcpServers: state.mcpServers.map(s =>
+                    s.id === serverId ? { ...s, enabled: !s.enabled } : s
+                )
+            })),
+
+            setMCPServers: (servers) => set({ mcpServers: servers })
         }),
         {
             name: 'cortex-ai',
@@ -398,10 +510,18 @@ export const useAIStore = create<AIState>()(
                 activeSessionId: state.activeSessionId,
                 vaultSystemPrompts: state.vaultSystemPrompts,
                 folderPrompts: state.folderPrompts,
-                webSearchEnabled: state.webSearchEnabled
+                webSearchEnabled: state.webSearchEnabled,
+                mcpServers: state.mcpServers
             }),
-            version: 6, // Bump version for folderPrompts
+            version: 7, // Bump version for MCP Servers
             migrate: (persistedState: any, version: number) => {
+                // Migration to v7 (MCP Servers)
+                if (version < 7) {
+                    persistedState = {
+                        ...persistedState,
+                        mcpServers: [],
+                    }
+                }
                 // Migration to v6 (Folder Prompts)
                 if (version < 6) {
                     persistedState = {

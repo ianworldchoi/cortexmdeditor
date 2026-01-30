@@ -1,6 +1,15 @@
 import { create } from 'zustand'
 import type { PendingDiff, Block } from '@shared/types'
 
+export interface FileDiffSummary {
+    filePath: string
+    fileName: string
+    deletions: number // -X (blocks deleted or modified)
+    additions: number // +Y (blocks added or modified)
+    status: 'modified' | 'created' | 'deleted' | 'error'
+    errorMessage?: string
+}
+
 interface DiffState {
     // Map: filePath -> array of pending diffs
     pendingDiffs: Map<string, PendingDiff[]>
@@ -20,8 +29,20 @@ interface DiffState {
     // Get all pending diffs for a file
     getDiffsForFile: (filePath: string) => PendingDiff[]
 
-    // Get a specific diff by block ID
+    // Get a specific diff by block ID (for update/delete diffs)
     getDiffForBlock: (filePath: string, blockId: string) => PendingDiff | undefined
+
+    // Get all diffs for a block (one block can have multiple diffs)
+    getDiffsForBlock: (filePath: string, blockId: string) => PendingDiff[]
+
+    // Get insert diffs that should appear after a specific block
+    getInsertDiffsAfterBlock: (filePath: string, afterBlockId: string) => PendingDiff[]
+
+    // Get summary for a specific file (calculates -X +Y)
+    getFileSummary: (filePath: string) => FileDiffSummary | null
+
+    // Get summaries for all files with pending diffs
+    getAllFileSummaries: () => FileDiffSummary[]
 
     // Clear all diffs for a file
     clearDiffsForFile: (filePath: string) => void
@@ -92,7 +113,22 @@ export const useDiffStore = create<DiffState>((set, get) => ({
 
     getDiffForBlock: (filePath, blockId) => {
         const diffs = get().pendingDiffs.get(filePath) || []
-        return diffs.find(d => d.blockId === blockId)
+        // For update/delete, find by blockId
+        return diffs.find(d => d.blockId === blockId && d.type !== 'insert')
+    },
+
+    getDiffsForBlock: (filePath, blockId) => {
+        const diffs = get().pendingDiffs.get(filePath) || []
+        return diffs.filter(d => d.blockId === blockId)
+    },
+
+    getInsertDiffsAfterBlock: (filePath, afterBlockId) => {
+        const diffs = get().pendingDiffs.get(filePath) || []
+        // Insert diffs use blockId as "afterBlockId" (insert after this block)
+        // Sort by insertIndex to maintain correct order
+        return diffs
+            .filter(d => d.type === 'insert' && d.blockId === afterBlockId)
+            .sort((a, b) => (a.insertIndex ?? 0) - (b.insertIndex ?? 0))
     },
 
     clearDiffsForFile: (filePath) => {
@@ -105,5 +141,48 @@ export const useDiffStore = create<DiffState>((set, get) => ({
 
     clearAllDiffs: () => {
         set({ pendingDiffs: new Map() })
+    },
+
+    getFileSummary: (filePath) => {
+        const diffs = get().pendingDiffs.get(filePath)
+        if (!diffs || diffs.length === 0) return null
+
+        const fileName = filePath.split('/').pop() || filePath
+        let deletions = 0
+        let additions = 0
+
+        for (const diff of diffs) {
+            if (diff.type === 'delete') {
+                deletions++
+            } else if (diff.type === 'insert') {
+                additions++
+            } else if (diff.type === 'update') {
+                // Update counts as both deletion and addition
+                deletions++
+                additions++
+            }
+        }
+
+        return {
+            filePath,
+            fileName,
+            deletions,
+            additions,
+            status: 'modified'
+        }
+    },
+
+    getAllFileSummaries: () => {
+        const { pendingDiffs } = get()
+        const summaries: FileDiffSummary[] = []
+
+        for (const filePath of pendingDiffs.keys()) {
+            const summary = get().getFileSummary(filePath)
+            if (summary) {
+                summaries.push(summary)
+            }
+        }
+
+        return summaries
     }
 }))
